@@ -448,6 +448,7 @@ def fused_experts_impl(
     gemm1_limit: Optional[float] = None,
     filter_expert: bool = True,
 ):
+    from sglang.srt.layers.moe.fused_moe_triton.moe_align_block_size import dcu_moe_align_block_size
     if isinstance(activation, int):
         activation = "silu" if activation == 0 else "gelu"
     padded_size = padding_size
@@ -576,7 +577,7 @@ def fused_experts_impl(
             and (not use_int4_w4a16)
         )
         if _use_lightop:
-            sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size_lightop(
+            sorted_token_ids, expert_ids, num_tokens_post_padded = dcu_moe_align_block_size(
                 curr_topk_ids, config["BLOCK_SIZE_M"], E
             )
         else:
@@ -771,11 +772,11 @@ def fused_experts_impl(
                 )
             else:
                 # According to micro benchmark results, torch.compile can get better performance for small token.
-                if _use_lightop: #nhb
+                if _use_lightop:
                         ops.moe_sum(
                         intermediate_cache3.view(*intermediate_cache3.shape),
                         out_hidden_states[begin_chunk_idx:end_chunk_idx],
-                        factor= 1.0,
+                        factor=routed_scaling_factor,
                         expect_m=-1,
                     )
                 elif tokens_in_chunk <= 32:

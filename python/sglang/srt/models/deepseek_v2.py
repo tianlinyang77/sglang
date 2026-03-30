@@ -156,6 +156,7 @@ from sglang.srt.utils import (
     get_device_sm,
     is_cpu,
     is_cuda,
+    is_dcu,
     is_npu,
     is_gfx95_supported,
     is_hip,
@@ -177,6 +178,7 @@ from enum import IntEnum, auto
 import tqdm
 from sglang.srt.layers.attention.tbo_backend import TboAttnBackend
 
+_is_dcu = is_dcu()
 _is_hip = is_hip()
 _is_cuda = is_cuda()
 _is_npu = is_npu()
@@ -976,7 +978,11 @@ class DeepseekV2MoE(nn.Module):
                     final_hidden_states = self.experts(hidden_states, topk_output, shared_output=shared_output)
             else:
                 final_hidden_states = self.experts(hidden_states, topk_output)
-                if not _is_cuda or isinstance(self.experts.quant_method, KTEPWrapperMethod):
+                if (
+                    ((not _is_cuda and not _use_aiter)
+                    or isinstance(self.experts.quant_method, KTEPWrapperMethod))
+                    and not _is_dcu
+                ):
                     final_hidden_states *= self.routed_scaling_factor
         current_stream.wait_stream(self.alt_stream)
         if not _use_lightop_moe_sum_mul_add:
@@ -1073,9 +1079,9 @@ class DeepseekV2MoE(nn.Module):
             topk_output,
             )
             if (
-                not _is_cuda
-                and not _use_aiter
-                or isinstance(self.experts.quant_method, KTEPWrapperMethod)
+                ((not _is_cuda and not _use_aiter)
+                or isinstance(self.experts.quant_method, KTEPWrapperMethod))
+                and not _is_dcu
             ):
                 # fused in biased_grouped_topk so we can skip here
                 final_hidden_states *= self.routed_scaling_factor

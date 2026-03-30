@@ -1,6 +1,7 @@
 # Adapted from https://github.com/vllm-project/vllm/tree/main/vllm/model_executor/layers/quantization/compressed_tensors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
+import inspect
 import os
 import logging
 from contextlib import suppress
@@ -1058,7 +1059,27 @@ class CompressedTensorsFusedMoEMethod(FusedMoEMethodBase):
         scheme = layer.scheme
         if scheme is None:
             raise ValueError("A scheme must be defined for each layer")
-        return scheme.apply_weights(layer, dispatch_output, bias, i_q, i_s)
+
+        apply_kwargs = {
+            "layer": layer,
+            "dispatch_output": dispatch_output,
+        }
+
+        supported_kwargs = getattr(scheme, "_apply_weights_supported_kwargs", None)
+        if supported_kwargs is None:
+            supported_kwargs = frozenset(inspect.signature(scheme.apply_weights).parameters)
+            scheme._apply_weights_supported_kwargs = supported_kwargs
+
+        supports_bias = "bias" in supported_kwargs
+        supports_prequant_input = "i_q" in supported_kwargs and "i_s" in supported_kwargs
+
+        if bias is not None and supports_bias:
+            apply_kwargs["bias"] = bias
+        if i_q is not None and i_s is not None and supports_prequant_input:
+            apply_kwargs["i_q"] = i_q
+            apply_kwargs["i_s"] = i_s
+
+        return scheme.apply_weights(**apply_kwargs)
 
         #return scheme.apply_weights(layer, dispatch_output, bias, i_q, i_s)
 

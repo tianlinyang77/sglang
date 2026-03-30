@@ -348,6 +348,8 @@ class CompressedTensorsW8A8Int8MarlinMoEMethod(CompressedTensorsMarlinMoEMethod)
         layer: torch.nn.Module,
         dispatch_output,
         #local_expert_mapping,
+        i_q: Optional[torch.Tensor] = None,
+        i_s: Optional[torch.Tensor] = None, 
     ) :
         from sglang.srt.layers.moe.token_dispatcher.standard import StandardCombineInput
         x = dispatch_output.hidden_states
@@ -375,6 +377,7 @@ class CompressedTensorsW8A8Int8MarlinMoEMethod(CompressedTensorsMarlinMoEMethod)
             a1_scale=layer.w13_input_scale,
             a2_scale=layer.w2_input_scale,
             use_nn_moe=False,
+            routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
             #expert_map=local_expert_mapping,
         )
         return StandardCombineInput(hidden_states=output)
@@ -408,6 +411,7 @@ class CompressedTensorsW8A8Int8MarlinMoEMethod(CompressedTensorsMarlinMoEMethod)
             a1_scale=layer.w13_input_scale,
             a2_scale=layer.w2_input_scale,
             use_nn_moe=False,
+            routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
             shared_output=shared_output,
             i_q=i_q,
             i_s=i_s,

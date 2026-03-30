@@ -250,6 +250,7 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
             a1_scale=layer.w13_input_scale,
             a2_scale=layer.w2_input_scale,
             use_nn_moe=False,
+            routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
         )
         return StandardCombineInput(hidden_states=output)
 
@@ -285,6 +286,7 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
             a1_scale=layer.w13_input_scale,
             a2_scale=layer.w2_input_scale,
             use_nn_moe=False,
+            routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
             shared_output=shared_output,
             i_q=i_q,
             i_s=i_s,
