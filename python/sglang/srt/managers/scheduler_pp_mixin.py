@@ -249,12 +249,6 @@ class SchedulerPPMixin:
                         self.mb_metadata,
                         self.last_rank_comm_queue,
                     )
-                    if self.is_pp_disagg_prefill_early_kv_send_enabled():
-                        torch.cuda.current_stream().wait_event(self.launch_event)
-                        self.send_kv_chunk_pp_disagg_prefill(
-                            self.cur_batch.reqs,
-                            result,
-                        )
                 if self.server_args.pp_async_batch_depth == 0:
                     next_pp_outputs, next_batch_result, d2h_event = (
                         self._pp_commit_send_output_work_and_preprocess_output_tensors(
@@ -290,7 +284,7 @@ class SchedulerPPMixin:
                 # post-process the coming microbatch
                 if self.mbs[next_mb_id] is not None:
                     d2h_event.synchronize()
-                    self.process_batch_result_pp_disagg_prefill(
+                    self._pp_process_batch_result(
                         self.mbs[next_mb_id],
                         next_batch_result,
                     )
@@ -322,19 +316,8 @@ class SchedulerPPMixin:
 
                 self.running_batch.batch_is_full = False
 
-            # When the server is idle, self-check and re-init some states.
-            # In PP disagg prefill overlap mode, requests may finish forward
-            # before bootstrap notify. Keep self-check disabled until all
-            # bootstrap/waiting/inflight queues are drained.
-            if self.is_pp_disagg_prefill_overlap_enabled():
-                queue_size = (
-                    len(self.waiting_queue)
-                    + len(self.disagg_prefill_inflight_queue)
-                    + len(self.disagg_prefill_bootstrap_queue.queue)
-                )
-            else:
-                queue_size = len(self.disagg_prefill_inflight_queue)
-            if server_is_idle and queue_size == 0:
+            # When the server is idle, self-check and re-init some states
+            if server_is_idle and len(self.disagg_prefill_inflight_queue) == 0:
                 self.self_check_during_idle()
 
     @DynamicGradMode()
@@ -763,24 +746,10 @@ class SchedulerPPMixin:
                 )
             )
 
-            if failed_reqs:
-                failed_rids = {req.rid for req in failed_reqs}
-                self.waiting_queue = [
-                    req for req in self.waiting_queue if req.rid not in failed_rids
-                ]
 
-            ready_reqs: List[Req] = []
-            for req in good_reqs:
-                self._enqueue_prefill_waiting_queue_if_needed(req)
-
-                if req.prefill_forward_done:
-                    ready_reqs.append(req)
-                else:
-                    self._mark_prefill_notify_done_wait_prefill(req)
-
-            if ready_reqs:
-                self._try_send_prefill_kv_ready_batch(ready_reqs)
-
+            # if ready_reqs:
+            #     self._try_send_prefill_kv_ready_batch(ready_reqs)
+            self.waiting_queue.extend(good_reqs)
             return [[req.rid for req in good_reqs], [req.rid for req in failed_reqs]]
         return None
 

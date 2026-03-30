@@ -1910,15 +1910,7 @@ class Scheduler(
             self.disagg_prefill_bootstrap_queue.add(
                 req, self.model_config.num_key_value_heads
             )
-            #req.time_stats.set_prefill_bootstrap_queue_entry_time()
-            req.time_stats.prefill_bootstrap_queue_entry_time = time.perf_counter()
-            if self.pp_size > 1 and self.is_pp_disagg_prefill_overlap_enabled():
-                # PP disagg prefill: enqueue to waiting queue immediately.
-                # KV transfer is still gated by bootstrap notify state.
-                self._enqueue_prefill_waiting_queue_if_needed(
-                    req,
-                    queue_entry_time=req.time_stats.prefill_bootstrap_queue_entry_time,
-                )
+            req.time_stats.set_prefill_bootstrap_queue_entry_time()
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
             self.disagg_decode_prealloc_queue.add(req, is_retracted=is_retracted)
             if not is_retracted:

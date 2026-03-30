@@ -813,6 +813,10 @@ class BailingMoEAttention(nn.Module):
                 return hidden_states
         qkv, _ = self.query_key_value(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        can_fuse_set_kv = (
+            self.head_dim == self.rotary_emb.rotary_dim
+            and enable_fused_set_kv_buffer(forward_batch)
+        )
         if self.use_qk_norm and not _use_fused_bailing_rms_rotary:
             q, k = apply_qk_norm(
                 q=q,
@@ -857,10 +861,6 @@ class BailingMoEAttention(nn.Module):
                 epsilon=self.query_layernorm.variance_epsilon,
             )
         else:
-            can_fuse_set_kv = (
-                self.head_dim == self.rotary_emb.rotary_dim
-                and enable_fused_set_kv_buffer(forward_batch)
-            )
             q, k = self.rotary_emb(
                 positions,
                 q,

@@ -60,6 +60,7 @@ from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     is_cuda,
     is_hip,
+    is_dcu,
     is_npu,
     support_triton,
     get_compiler_backend,
@@ -83,6 +84,7 @@ if TYPE_CHECKING:
 
 _is_npu = is_npu()
 _is_hip = is_hip()
+_is_dcu = is_dcu()
 
 class ForwardMode(IntEnum):
     # Extend a sequence. The KV cache of the beginning part of the sequence is already computed (e.g., system prompt).
@@ -1256,7 +1258,7 @@ def _clamp_position_native(seq_lens):
     return torch.clamp((seq_lens - 1), min=0).to(torch.int64)
 
 
-if is_cuda() or is_hip():
+if (is_cuda() or is_hip()) and not is_dcu():
     from sglang.jit_kernel.clamp_position import clamp_position_cuda
 
     clamp_position = clamp_position_cuda
