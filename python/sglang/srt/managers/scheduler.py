@@ -952,6 +952,15 @@ class Scheduler(
         self.transfer_backend = TransferBackend(
             self.server_args.disaggregation_transfer_backend
         )
+        #nhb
+        if self.draft_worker is None or self.spec_algorithm.is_ngram():
+            draft_token_to_kv_pool = None
+        elif self.spec_algorithm.is_eagle() and self.enable_overlap:
+            draft_token_to_kv_pool = (
+                self.draft_worker.draft_worker.draft_runner.token_to_kv_pool
+            )
+        else:
+            draft_token_to_kv_pool = self.draft_worker.model_runner.token_to_kv_pool
 
         if self.draft_worker is None or self.spec_algorithm.is_ngram():
             draft_token_to_kv_pool = None
@@ -998,7 +1007,7 @@ class Scheduler(
                 scheduler=self,
                 tree_cache=self.tree_cache,
             )
-
+           
             # The decode requests pending for pre-allocation
             self.disagg_decode_prealloc_queue = DecodePreallocQueue(
                 req_to_token_pool=self.req_to_token_pool,
@@ -1901,7 +1910,15 @@ class Scheduler(
             self.disagg_prefill_bootstrap_queue.add(
                 req, self.model_config.num_key_value_heads
             )
-            req.time_stats.set_prefill_bootstrap_queue_entry_time()
+            #req.time_stats.set_prefill_bootstrap_queue_entry_time()
+            req.time_stats.prefill_bootstrap_queue_entry_time = time.perf_counter()
+            if self.pp_size > 1 and self.is_pp_disagg_prefill_overlap_enabled():
+                # PP disagg prefill: enqueue to waiting queue immediately.
+                # KV transfer is still gated by bootstrap notify state.
+                self._enqueue_prefill_waiting_queue_if_needed(
+                    req,
+                    queue_entry_time=req.time_stats.prefill_bootstrap_queue_entry_time,
+                )
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
             self.disagg_decode_prealloc_queue.add(req, is_retracted=is_retracted)
             if not is_retracted:
@@ -2644,7 +2661,8 @@ class Scheduler(
 
                     batch.spec_info = batch_result.next_draft_input
                     batch.spec_info.future_indices = future_indices
-
+                    batch.sampling_info.is_all_greedy = True #nhb
+                    # from sglang.srt.speculative.eagle_info import EagleDraftInput
                     # batch.spec_info = EagleDraftInput(
                     #     future_indices=future_indices,
                     #     verify_done=batch_result.next_draft_input.verify_done,

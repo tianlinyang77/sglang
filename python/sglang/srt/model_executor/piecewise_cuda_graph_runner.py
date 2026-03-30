@@ -137,9 +137,9 @@ def set_torch_compile_config():
     import torch._dynamo.config
 
     # Resolve torch._dynamo.exc.FailOnRecompileLimitHit
-    torch._dynamo.config.accumulated_cache_size_limit = 1024
+    torch._dynamo.config.accumulated_cache_size_limit = 4096  # renzhc
     if hasattr(torch._dynamo.config, "cache_size_limit"):
-        torch._dynamo.config.cache_size_limit = 1024
+        torch._dynamo.config.cache_size_limit = 4096  # renzhc
 
 
 class PiecewiseCudaGraphRunner:

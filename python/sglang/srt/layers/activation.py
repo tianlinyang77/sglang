@@ -36,6 +36,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_dcu,
     is_npu,
     is_xpu,
     set_weight_attrs,
@@ -48,6 +49,7 @@ _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _is_hip = is_hip()
 _is_xpu = is_xpu()
+_is_dcu = is_dcu()
 
 if _is_cuda or _is_xpu:
     from sgl_kernel import gelu_and_mul, gelu_tanh_and_mul, silu_and_mul
@@ -74,7 +76,11 @@ class SiluAndMul(MultiPlatformOp):
         d = x.shape[-1] // 2
         output_shape = x.shape[:-1] + (d,)
         out = torch.empty(output_shape, dtype=x.dtype, device=x.device)
-        silu_and_mul(x, out)
+        if is_dcu:
+            from lightop import fuse_silu_and_mul
+            fuse_silu_and_mul(x, out)
+        else:
+            silu_and_mul(x, out)
         return out
 
     def forward_cpu(self, x: torch.Tensor) -> torch.Tensor:

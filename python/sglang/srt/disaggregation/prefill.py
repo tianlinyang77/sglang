@@ -20,10 +20,13 @@ Life cycle of a request in the prefill server
 from __future__ import annotations
 
 import logging
+import os
+import time
 from collections import deque
 from http import HTTPStatus
 from typing import TYPE_CHECKING, List, Optional
 
+import numpy as np
 import torch
 
 from sglang.srt.disaggregation.base import KVPoll
@@ -37,7 +40,6 @@ from sglang.srt.disaggregation.utils import (
     TransferBackend,
     get_kv_class,
     is_mla_backend,
-    kv_to_page_indices,
     kv_to_page_num,
     poll_and_all_reduce_attn_cp_tp_group,
     prepare_abort,
@@ -60,6 +62,12 @@ if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import KVCache
 
 logger = logging.getLogger(__name__)
+
+# PP disaggregation prefill parallel state machine (int states for lower overhead)
+PREFILL_BOOTSTRAP_STATE_BOOTSTRAPPING = 0
+PREFILL_BOOTSTRAP_STATE_PREFILL_DONE_WAIT_NOTIFY = 1
+PREFILL_BOOTSTRAP_STATE_NOTIFY_DONE_WAIT_PREFILL = 2
+PREFILL_BOOTSTRAP_STATE_PREFILL_NOTIFY_DONE = 3
 
 
 def release_req_to_metadata_buffer(
@@ -223,6 +231,7 @@ class PrefillBootstrapQueue:
             dest_tp_ranks=dest_tp_ranks,
             pp_rank=self.pp_rank,
         )
+        self._init_prefill_parallel_state(req)
         self._process_req(req)
         self.queue.append(req)
 
@@ -245,6 +254,19 @@ class PrefillBootstrapQueue:
         Set max_new_tokens = 1, so PrefillAdder memory estimation is accurate
         """
         req.sampling_params.max_new_tokens = 1
+
+    def _init_prefill_parallel_state(self, req: Req) -> None:
+        req.prefill_bootstrap_state = PREFILL_BOOTSTRAP_STATE_BOOTSTRAPPING
+        req.prefill_forward_done = False
+        req.prefill_notify_done = False
+        req.prefill_kv_sent = False
+
+    def _mark_prefill_notify_done(self, req: Req) -> None:
+        req.prefill_notify_done = True
+        if req.prefill_forward_done:
+            req.prefill_bootstrap_state = PREFILL_BOOTSTRAP_STATE_PREFILL_NOTIFY_DONE
+        else:
+            req.prefill_bootstrap_state = PREFILL_BOOTSTRAP_STATE_NOTIFY_DONE_WAIT_PREFILL
 
     def pop_bootstrapped(
         self,
@@ -316,6 +338,7 @@ class PrefillBootstrapQueue:
 
             num_pages = kv_to_page_num(num_kv_indices, self.token_to_kv_pool.page_size)
             req.disagg_kv_sender.init(num_pages, req.metadata_buffer_index)
+            self._mark_prefill_notify_done(req)
 
             bootstrapped_reqs.append(req)
             indices_to_remove.add(i)
@@ -335,6 +358,29 @@ class SchedulerDisaggregationPrefillMixin:
     """
     Mixin for Scheduler to handle disaggregation prefill
     """
+
+    def is_pp_disagg_prefill_overlap_enabled(self: Scheduler) -> bool:
+        """
+        Toggle for PP disagg prefill overlap path:
+        - enabled: requests can be enqueued to waiting queue before bootstrap notify,
+          and KV may be sent early right after launch.
+        - disabled: fall back to legacy behavior (bootstrap consensus first, send KV in post-process).
+        """
+        value = os.getenv("SGLANG_PP_DISAGG_PREFILL_OVERLAP", "1").strip().lower()
+        return value not in ("0", "false", "off", "no")
+
+    def is_pp_disagg_prefill_early_kv_send_enabled(self: Scheduler) -> bool:
+        """
+        Toggle for PP disagg prefill early KV send:
+        - enabled: send KV right after _pp_launch_batch.
+        - disabled: send KV in process_batch_result_pp_disagg_prefill.
+
+        Backward compatibility: if env is unset, inherit overlap toggle behavior.
+        """
+        value = os.getenv("SGLANG_PP_DISAGG_PREFILL_EARLY_KV_SEND")
+        if value is None:
+            return self.is_pp_disagg_prefill_overlap_enabled()
+        return value.strip().lower() not in ("0", "false", "off", "no")
 
     def get_next_disagg_prefill_batch_to_run(
         self: Scheduler,
@@ -542,6 +588,20 @@ class SchedulerDisaggregationPrefillMixin:
             dp_cooperation_info=batch.dp_cooperation_info,
         )
 
+    def _log_disagg_prefill_stats_if_needed(
+        self: Scheduler,
+        batch: ScheduleBatch,
+        result: GenerationBatchResult,
+    ) -> None:
+        if not self.current_scheduler_metrics_enabled or batch.prefill_stats is None:
+            return
+
+        self.log_prefill_stats(
+            prefill_stats=batch.prefill_stats,
+            can_run_cuda_graph=getattr(result, "can_run_cuda_graph", False),
+            dp_cooperation_info=batch.dp_cooperation_info,
+        )
+
     def process_disagg_prefill_inflight_queue(
         self: Scheduler, rids_to_check: Optional[List[str]] = None
     ) -> List[Req]:
@@ -675,6 +735,7 @@ class SchedulerDisaggregationPrefillMixin:
 
         return transferred_rids
 
+    # fix bug:merge pr:13144,修复了pp+chunked prefill的 kv_cache memory leak 
     def process_prefill_chunk(self: Scheduler) -> None:
         chunked_req_to_exclude = set()
         if self.chunked_req:
@@ -724,14 +785,19 @@ class SchedulerDisaggregationPrefillMixin:
             # if not the last chunk and the last page is partial, delay the last partial page to the next send
             end_idx = end_idx - end_idx % page_size
 
-        kv_indices = (
-            self.req_to_token_pool.req_to_token[req.req_pool_idx, start_idx:end_idx]
-            .cpu()
-            .numpy()
-        )
+        kv_indices = self.req_to_token_pool.req_to_token[
+            req.req_pool_idx, start_idx:end_idx
+        ]
+        page_indices = self._torch_indices_to_page_indices_numpy(kv_indices, page_size)
+        if len(page_indices) == 0:
+            logger.info(
+                f"Skip sending kv chunk for request {req.rid=} {req.bootstrap_room=} because page_indices is empty"
+            )
+            return
+
         req.start_send_idx = end_idx
         state_indices = None
-        if last_chunk:
+        if last_chunk and self.pp_group.is_last_rank:
             self.disagg_metadata_buffers.set_buf(req)
 
             # Prepare extra pool indices for hybrid models
@@ -739,13 +805,10 @@ class SchedulerDisaggregationPrefillMixin:
                 self.token_to_kv_pool_allocator.get_kvcache(), HybridLinearKVPool
             ):
                 # Mamba hybrid model: send single mamba state index
-                state_indices = [
-                    self.req_to_token_pool.req_index_to_mamba_index_mapping[
-                        req.req_pool_idx
-                    ]
-                    .cpu()
-                    .numpy()
+                mamba_state_index = self.req_to_token_pool.req_index_to_mamba_index_mapping[
+                    req.req_pool_idx
                 ]
+                state_indices = [int(mamba_state_index.item())]
             elif isinstance(self.token_to_kv_pool_allocator.get_kvcache(), SWAKVPool):
                 # SWA hybrid model: send last window KV indices
                 seq_len = len(req.fill_ids)
@@ -763,8 +826,9 @@ class SchedulerDisaggregationPrefillMixin:
                         window_kv_indices_full
                     )
                 )
-                state_indices = window_kv_indices_swa.cpu().numpy()
-                state_indices = kv_to_page_indices(state_indices, page_size)
+                state_indices = self._torch_indices_to_page_indices_numpy(
+                    window_kv_indices_swa, page_size
+                )
             elif isinstance(
                 self.token_to_kv_pool_allocator.get_kvcache(), NSATokenToKVPool
             ):
@@ -772,13 +836,299 @@ class SchedulerDisaggregationPrefillMixin:
                 kv_indices_full = self.req_to_token_pool.req_to_token[
                     req.req_pool_idx, :seq_len
                 ]
-                state_indices = kv_indices_full.cpu().numpy()
-                state_indices = kv_to_page_indices(state_indices, page_size)
+                state_indices = self._torch_indices_to_page_indices_numpy(
+                    kv_indices_full, page_size
+                )
 
-        page_indices = kv_to_page_indices(kv_indices, page_size)
-        if len(page_indices) == 0:
-            logger.info(
-                f"Skip sending kv chunk for request {req.rid=} {req.bootstrap_room=} because page_indices is empty"
-            )
-            return
         req.disagg_kv_sender.send(page_indices, state_indices)
+
+    def _torch_indices_to_page_indices_numpy(
+        self: Scheduler,
+        kv_indices: torch.Tensor,
+        page_size: int,
+    ) -> np.ndarray:
+        # Convert to page indices first, then move to CPU to reduce D2H volume.
+        if page_size == 1:
+            page_indices = kv_indices
+        else:
+            page_indices = torch.div(
+                kv_indices[::page_size], page_size, rounding_mode="floor"
+            )
+        return page_indices.cpu().numpy().astype(np.int32, copy=False)
+
+    def _send_prefill_kv_assume_ready(self: Scheduler, req: Req) -> None:
+        self.tree_cache.cache_unfinished_req(req)  # update the tree and lock
+        self.disagg_prefill_inflight_queue.append(req)
+        self.send_kv_chunk(req, last_chunk=True)
+        req.prefill_kv_sent = True
+        req.prefill_bootstrap_state = PREFILL_BOOTSTRAP_STATE_PREFILL_NOTIFY_DONE
+
+    def _is_prefill_kv_ready(self: Scheduler, req: Req) -> bool:
+        return (
+            req.is_chunked <= 0
+            and (not req.prefill_kv_sent)
+            and req.prefill_forward_done
+            and req.prefill_notify_done
+            and req.metadata_buffer_index >= 0
+        )
+
+    def _enqueue_prefill_waiting_queue_if_needed(
+        self: Scheduler,
+        req: Req,
+        queue_entry_time: Optional[float] = None,
+    ) -> None:
+        if req.prefill_waiting_enqueued:
+            return
+
+        self.waiting_queue.append(req)
+        req.prefill_waiting_enqueued = True
+        if req.time_stats.wait_queue_entry_time == 0.0:
+            req.time_stats.wait_queue_entry_time = (
+                queue_entry_time if queue_entry_time is not None else time.perf_counter()
+            )
+
+    def _mark_prefill_forward_done(self: Scheduler, req: Req) -> None:
+        req.prefill_forward_done = True
+        if req.prefill_notify_done:
+            req.prefill_bootstrap_state = PREFILL_BOOTSTRAP_STATE_PREFILL_NOTIFY_DONE
+        else:
+            req.prefill_bootstrap_state = PREFILL_BOOTSTRAP_STATE_PREFILL_DONE_WAIT_NOTIFY
+
+    def _mark_prefill_notify_done_wait_prefill(self: Scheduler, req: Req) -> None:
+        req.prefill_bootstrap_state = PREFILL_BOOTSTRAP_STATE_NOTIFY_DONE_WAIT_PREFILL
+
+    def _get_pp_last_rank_output_ids(
+        self: Scheduler,
+        result: GenerationBatchResult,
+        non_chunked_positions: List[int],
+    ) -> List[int]:
+        if len(non_chunked_positions) == 0:
+            return []
+        if not self.pp_group.is_last_rank:
+            return []
+
+        non_chunked_len = len(non_chunked_positions)
+        if self.attn_tp_rank == 0:
+            next_token_ids = result.next_token_ids
+            if non_chunked_len == len(next_token_ids):
+                output_ids_tensor = next_token_ids.to("cpu")
+            else:
+                index_tensor = torch.tensor(
+                    non_chunked_positions,
+                    dtype=torch.long,
+                    device=next_token_ids.device,
+                )
+                output_ids_tensor = next_token_ids.index_select(0, index_tensor).to(
+                    "cpu"
+                )
+        else:
+            # Placeholder tensor; populated by TP0 broadcast.
+            output_ids_tensor = torch.empty(non_chunked_len, dtype=torch.long)
+
+        if self.attn_tp_size > 1:
+            torch.distributed.broadcast(
+                output_ids_tensor,
+                src=self.attn_tp_group.ranks[0],
+                group=self.attn_tp_cpu_group,
+            )
+        return output_ids_tensor.tolist()
+
+    def _try_send_prefill_kv_ready_batch(
+        self: Scheduler,
+        reqs: List[Req],
+        positions: Optional[List[int]] = None,
+    ) -> int:
+        send_prefill_kv_assume_ready = self._send_prefill_kv_assume_ready
+        is_prefill_kv_ready = self._is_prefill_kv_ready
+
+        sent = 0
+        req_iter = (reqs[pos] for pos in positions) if positions is not None else reqs
+        for req in req_iter:
+            if is_prefill_kv_ready(req):
+                send_prefill_kv_assume_ready(req)
+                sent += 1
+        return sent
+
+    def _mark_prefill_finished_ts_if_needed(self: Scheduler, req: Req, ts: float) -> None:
+        if req.time_stats.prefill_finished_ts == 0.0:
+            req.time_stats.prefill_finished_ts = ts
+
+    def _mark_prefill_forward_done_for_reqs(
+        self: Scheduler,
+        reqs: List[Req],
+        non_chunked_positions: List[int],
+        ts: float,
+    ) -> None:
+        mark_prefill_forward_done = self._mark_prefill_forward_done
+        mark_prefill_finished_ts_if_needed = self._mark_prefill_finished_ts_if_needed
+        for pos in non_chunked_positions:
+            req = reqs[pos]
+            mark_prefill_finished_ts_if_needed(req, ts)
+            mark_prefill_forward_done(req)
+
+    def _append_last_rank_output_ids(
+        self: Scheduler,
+        reqs: List[Req],
+        non_chunked_positions: List[int],
+        output_ids: List[int],
+    ) -> None:
+        for pos, output_id in zip(non_chunked_positions, output_ids, strict=True):
+            reqs[pos].output_ids.append(output_id)
+
+    def _get_non_chunked_positions(self: Scheduler, reqs: List[Req]) -> List[int]:
+        return [i for i, req in enumerate(reqs) if req.is_chunked <= 0]
+
+    def process_batch_result_pp_disagg_prefill(
+        self: Scheduler,
+        batch: ScheduleBatch,
+        result: GenerationBatchResult,
+    ) -> None:
+        """
+        PP disaggregation prefill post-process.
+        KV transfer for completed requests can be handled earlier in
+        send_kv_chunk_pp_disagg_prefill when early-send is enabled.
+        """
+        (
+            logits_output,
+            next_token_ids,
+            extend_input_len_per_req,
+            extend_logprob_start_len_per_req,
+            copy_done,
+        ) = (
+            result.logits_output,
+            result.next_token_ids,
+            result.extend_input_len_per_req,
+            result.extend_logprob_start_len_per_req,
+            result.copy_done,
+        )
+
+        if copy_done is not None:
+            copy_done.synchronize()
+
+        logprob_pt = 0
+        next_token_ids = next_token_ids.tolist()
+        if batch.return_logprob:
+            if logits_output.next_token_logprobs is not None:
+                logits_output.next_token_logprobs = (
+                    logits_output.next_token_logprobs.tolist()
+                )
+            if logits_output.input_token_logprobs is not None:
+                logits_output.input_token_logprobs = tuple(
+                    logits_output.input_token_logprobs.tolist()
+                )
+
+        pp_disagg_prefill_early_kv_send_enabled = (
+            self.is_pp_disagg_prefill_early_kv_send_enabled()
+        )
+        for i, (req, next_token_id) in enumerate(
+            zip(batch.reqs, next_token_ids, strict=True)
+        ):
+            if req.is_chunked <= 0:
+                if not pp_disagg_prefill_early_kv_send_enabled:
+                    self._mark_prefill_finished_ts_if_needed(req, time.time())
+                    if not req.prefill_forward_done:
+                        self._mark_prefill_forward_done(req)
+                # In early-send mode, last rank has appended output_ids in early-send path.
+                # Without early-send, append here for all ranks.
+                if (not self.pp_group.is_last_rank) or (
+                    not pp_disagg_prefill_early_kv_send_enabled
+                ):
+                    req.output_ids.append(next_token_id)
+                req.add_latency(RequestStage.PREFILL_FORWARD)
+                trace_slice(RequestStage.PREFILL_FORWARD, req.rid, auto_next_anon=True)
+                if self.spec_algorithm.is_eagle() and batch.spec_info is not None:
+                    req.output_topk_p = batch.spec_info.topk_p[i]
+                    req.output_topk_index = batch.spec_info.topk_index[i]
+                    req.hidden_states_tensor = (
+                        batch.spec_info.hidden_states[i].cpu().clone()
+                    )
+                else:
+                    req.hidden_states_tensor = None
+                if req.return_logprob:
+                    assert extend_logprob_start_len_per_req is not None
+                    assert extend_input_len_per_req is not None
+                    extend_logprob_start_len = extend_logprob_start_len_per_req[i]
+                    extend_input_len = extend_input_len_per_req[i]
+                    num_input_logprobs = extend_input_len - extend_logprob_start_len
+                    self.add_logprob_return_values(
+                        i,
+                        req,
+                        logprob_pt,
+                        next_token_ids,
+                        num_input_logprobs,
+                        logits_output,
+                    )
+                    logprob_pt += num_input_logprobs
+                req.time_stats.prefill_transfer_queue_entry_time = time.perf_counter()
+                if (
+                    not pp_disagg_prefill_early_kv_send_enabled
+                    and not req.prefill_kv_sent
+                    and self._is_prefill_kv_ready(req)
+                ):
+                    # Legacy path for A/B: send KV in post-process stage.
+                    self._send_prefill_kv_assume_ready(req)
+
+                if req.grammar is not None:
+                    # FIXME: this try-except block is for handling unexpected xgrammar issue.
+                    try:
+                        req.grammar.accept_token(next_token_id)
+                    except ValueError as e:
+                        # Grammar accept_token can raise ValueError if the token is not in the grammar.
+                        # This can happen if the grammar is not set correctly or the token is invalid.
+                        error_message = f"Grammar accept_token failed for req {req.rid} with token {next_token_id}: {e}"
+                        release_kv_cache(req, self.tree_cache)
+                        prepare_abort(
+                            req,
+                            error_message,
+                            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+                        )
+                    req.grammar.finished = req.finished()
+            else:
+                # being chunked reqs' prefill is not finished
+                req.is_chunked -= 1
+
+                if req.return_logprob:
+                    extend_logprob_start_len = extend_logprob_start_len_per_req[i]
+                    extend_input_len = extend_input_len_per_req[i]
+                    if extend_logprob_start_len < extend_input_len:
+                        # Update input logprobs.
+                        num_input_logprobs = extend_input_len - extend_logprob_start_len
+                        self.add_input_logprob_return_values(
+                            i,
+                            req,
+                            logits_output,
+                            logprob_pt,
+                            num_input_logprobs,
+                            last_prefill_chunk=False,
+                        )
+                        logprob_pt += num_input_logprobs
+
+                if self.enable_overlap:
+                    self.send_kv_chunk(req, last_chunk=False, end_idx=req.tmp_end_idx)
+                trace_slice(
+                    RequestStage.PREFILL_CHUNKED_FORWARD, req.rid, auto_next_anon=True
+                )
+
+        self._log_disagg_prefill_stats_if_needed(batch, result)
+        self.maybe_send_health_check_signal()
+
+    def send_kv_chunk_pp_disagg_prefill(
+        self: Scheduler,
+        reqs: List[Req],
+        result: GenerationBatchResult,
+    ) -> None:
+        """
+        Send KV for completed requests as early as possible in PP disagg prefill.
+        """
+        non_chunked_positions = self._get_non_chunked_positions(reqs)
+        if len(non_chunked_positions) == 0:
+            return
+
+        now_ts = time.time()
+        self._mark_prefill_forward_done_for_reqs(reqs, non_chunked_positions, now_ts)
+
+        if self.pp_group.is_last_rank:
+            output_ids = self._get_pp_last_rank_output_ids(result, non_chunked_positions)
+            self._append_last_rank_output_ids(reqs, non_chunked_positions, output_ids)
+
+        self._try_send_prefill_kv_ready_batch(reqs, non_chunked_positions)

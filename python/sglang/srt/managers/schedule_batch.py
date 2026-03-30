@@ -776,6 +776,12 @@ class Req(ReqDllmMixin):
         self.bootstrap_port: Optional[int] = bootstrap_port
         self.bootstrap_room: Optional[int] = bootstrap_room
         self.disagg_kv_sender: Optional[BaseKVSender] = None
+        # PP disaggregation prefill parallel state machine
+        self.prefill_bootstrap_state: Optional[int] = None
+        self.prefill_forward_done: bool = False
+        self.prefill_notify_done: bool = False
+        self.prefill_kv_sent: bool = False
+        self.prefill_waiting_enqueued: bool = False
 
         self.routed_dp_rank: Optional[int] = routed_dp_rank
         self.disagg_prefill_dp_rank: Optional[int] = disagg_prefill_dp_rank
@@ -1523,6 +1529,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         self.seq_lens = seq_lens_tensor
         self.seq_lens_cpu = seq_lens_cpu
         self.extend_num_tokens = extend_num_tokens
+        self.loc_tensor = torch.tensor([-1], device=self.device) 
 
         # Allocate memory
         out_cache_loc, req_pool_indices_tensor, req_pool_indices = alloc_for_extend(

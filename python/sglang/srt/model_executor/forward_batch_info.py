@@ -62,8 +62,14 @@ from sglang.srt.utils import (
     is_hip,
     is_npu,
     support_triton,
+    get_compiler_backend,
+    get_bool_env_var,
 )
 from sglang.srt.utils.common import ceil_align
+from sgl_kernel.kvcacheio import dcu_create_chunked_prefix_cache_kv_indices
+
+import logging
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
@@ -76,7 +82,7 @@ if TYPE_CHECKING:
     from sglang.srt.speculative.spec_info import SpecInput, SpeculativeAlgorithm
 
 _is_npu = is_npu()
-
+_is_hip = is_hip()
 
 class ForwardMode(IntEnum):
     # Extend a sequence. The KV cache of the beginning part of the sequence is already computed (e.g., system prompt).
@@ -417,8 +423,13 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     dimensions: Optional[list[int]] = None
 
     attn_cp_metadata: Optional[ContextParallelMetadata] = None
+    # dcu only
+    residual_rms_per_quant_int8: Optional[torch.Tensor] = None
+    rms_quant_flag: bool = False
+
     # Record the split metadata of the sequence number of NSA context parallels.
     nsa_cp_metadata: Optional[NSAContextParallelMetadata] = None
+    # use_sglang_create_chunked_prefix_cache_kv_indices  = get_bool_env_var("SGLANG_CREATE_CHUNKED_PREFIX_CACHE_KV_INDICES")
 
     # For hidden states before normal
     return_hidden_states_before_norm: bool = False
@@ -483,12 +494,12 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         if batch.extend_input_logprob_token_ids is not None:
             ret.extend_input_logprob_token_ids_gpu = (
-                batch.extend_input_logprob_token_ids.to(device, non_blocking=True)
+                batch.extend_input_logprob_token_ids.pin_memory().to(device, non_blocking=True)
             )
 
         num_tokens = len(batch.input_ids) if batch.input_ids is not None else 0
         if enable_num_token_non_padded(model_runner.server_args):
-            ret.num_token_non_padded = torch.tensor(num_tokens, dtype=torch.int32).to(
+            ret.num_token_non_padded = torch.tensor(num_tokens, dtype=torch.int32).pin_memory().to(
                 device, non_blocking=True
             )
         ret.num_token_non_padded_cpu = num_tokens
@@ -511,12 +522,12 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             ret.global_num_tokens_cpu = global_num_tokens
             ret.global_num_tokens_gpu = torch.tensor(
                 global_num_tokens, dtype=torch.int64
-            ).to(device, non_blocking=True)
+            ).pin_memory().to(device, non_blocking=True)
 
             ret.global_num_tokens_for_logprob_cpu = global_num_tokens_for_logprob
             ret.global_num_tokens_for_logprob_gpu = torch.tensor(
                 global_num_tokens_for_logprob, dtype=torch.int64
-            ).to(device, non_blocking=True)
+            ).pin_memory().to(device, non_blocking=True)
 
         if ret.forward_mode.is_idle():
             ret.positions = torch.empty((0,), dtype=torch.int64, device=device)
@@ -550,10 +561,10 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             assert isinstance(batch.extend_prefix_lens, list)
             ret.extend_seq_lens = torch.tensor(
                 batch.extend_seq_lens, dtype=torch.int32
-            ).to(device, non_blocking=True)
+            ).pin_memory().to(device, non_blocking=True)
             ret.extend_prefix_lens = torch.tensor(
                 batch.extend_prefix_lens, dtype=torch.int32
-            ).to(device, non_blocking=True)
+            ).pin_memory().to(device, non_blocking=True)
             ret.extend_num_tokens = batch.extend_num_tokens
             positions, ret.extend_start_loc = compute_position(
                 model_runner.server_args.attention_backend,
@@ -805,6 +816,62 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             dim=1,
         ).to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
 
+    def get_max_chunk_capacity(self):
+        # Maximum number of tokens in each chunk
+        # TODO: Should be changed to a better value, maybe passed through server args
+        return 128 * 1024
+
+    def set_prefix_chunk_idx(self, idx: int):
+        self.prefix_chunk_idx = idx
+
+    def set_attn_attend_prefix_cache(self, attn_attend_prefix_cache: bool):
+        self.attn_attend_prefix_cache = attn_attend_prefix_cache
+
+    def prepare_chunked_kv_indices(self, device: torch.device):
+        self.prefix_chunk_kv_indices = []
+        for idx in range(self.num_prefix_chunks):
+            chunk_starts = self.prefix_chunk_starts[idx]
+            chunk_seq_lens = self.prefix_chunk_seq_lens[idx]
+            chunk_cu_seq_lens = self.prefix_chunk_cu_seq_lens[idx]
+            num_chunk_tokens = self.prefix_chunk_num_tokens[idx]
+
+            chunk_kv_indices = torch.empty(
+                num_chunk_tokens, dtype=torch.int32, device=device
+            )
+            dcu_create_chunked_prefix_cache_kv_indices(
+                    req_to_token = self.req_to_token_pool.req_to_token,
+                    req_pool_indices = self.req_pool_indices,
+                    chunk_starts = chunk_starts,
+                    chunk_seq_lens = chunk_seq_lens,
+                    chunk_cu_seq_lens = chunk_cu_seq_lens,
+                    chunk_kv_indices = chunk_kv_indices,
+                    col_num = self.req_to_token_pool.req_to_token.shape[1],
+                    bs = self.batch_size,
+                )
+            # if self.use_sglang_create_chunked_prefix_cache_kv_indices:
+            #     dcu_create_chunked_prefix_cache_kv_indices(
+            #         req_to_token = self.req_to_token_pool.req_to_token,
+            #         req_pool_indices = self.req_pool_indices,
+            #         chunk_starts = chunk_starts,
+            #         chunk_seq_lens = chunk_seq_lens,
+            #         chunk_cu_seq_lens = chunk_cu_seq_lens,
+            #         chunk_kv_indices = chunk_kv_indices,
+            #         col_num = self.req_to_token_pool.req_to_token.shape[1],
+            #         bs = self.batch_size,
+            #     )
+            # else:
+            #     # logger.info("SGLANG_CREATE_CHUNKED_PREFIX_CACHE_KV_INDICES=0")
+            #     create_chunked_prefix_cache_kv_indices[(self.batch_size,)](
+            #         self.req_to_token_pool.req_to_token,
+            #         self.req_pool_indices,
+            #         chunk_starts,
+            #         chunk_seq_lens,
+            #         chunk_cu_seq_lens,
+            #         chunk_kv_indices,
+            #         self.req_to_token_pool.req_to_token.shape[1],
+            #     )
+            self.prefix_chunk_kv_indices.append(chunk_kv_indices)
+
     def _pad_tensor_to_size(self, tensor: torch.Tensor, size: int, *, value: int = 0):
         if value == 0:
             return torch.cat(
@@ -829,7 +896,6 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         global_num_tokens = self.global_num_tokens_cpu
         sync_group_size = len(global_num_tokens)
         attn_tp_size = get_attention_tp_size()
-
         for i in range(sync_group_size):
             # make sure that the padded length is divisible by attn_tp_size because we may need reduce-scatter across attn_tp dim.
             # there is no reduce-scatter in LM logprob, so we do not need to adjust the padded length for logprob

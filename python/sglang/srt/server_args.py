@@ -49,6 +49,7 @@ from sglang.srt.utils.common import (
     is_cuda,
     is_flashinfer_available,
     is_hip,
+    is_dcu,
     is_hopper_with_cuda_12_3,
     is_mps,
     is_no_spec_infer_or_topk_one,
@@ -64,6 +65,7 @@ from sglang.srt.utils.common import (
     parse_connector_type,
     torch_release,
     xpu_has_xmx_support,
+    is_dcu,
 )
 from sglang.srt.utils.hf_transformers_utils import check_gguf_file
 from sglang.srt.utils.network import NetworkAddress, get_free_port, wait_port_available
@@ -117,6 +119,8 @@ QUANTIZATION_CHOICES = [
     "compressed-tensors",  # for Ktransformers
     "modelslim",  # for NPU
     "quark_int4fp8_moe",
+    "slimquant_w4a8_marlin",
+    "slimquant_marlin",
 ]
 
 SPECULATIVE_DRAFT_MODEL_QUANTIZATION_CHOICES = [*QUANTIZATION_CHOICES, "unquant"]
@@ -127,6 +131,8 @@ ATTENTION_BACKEND_CHOICES = [
     "torch_native",
     "flex_attention",
     "nsa",
+    # ransplant from vllm
+    "dcu_mla", 
     # NVIDIA specific
     "cutlass_mla",
     "fa3",
@@ -1553,7 +1559,7 @@ class ServerArgs:
                                 f"attn_tp_size={self.tp_size}, attention weights will be sharded across {self.tp_size} ranks."
                             )
 
-                    if is_hip():
+                    if is_hip() and not is_dcu(): #nhb
                         self.page_size = 1
                         logger.warning(
                             "Setting page size to 1 for DeepSeek DSA on ROCm."
@@ -2135,7 +2141,7 @@ class ServerArgs:
                 )
 
             assert (
-                is_cuda()
+                is_cuda() or is_dcu()
             ), "Mamba extra_buffer is only supported on CUDA devices with FLA backend"
             if self.speculative_num_draft_tokens is not None:
                 assert (
@@ -2278,9 +2284,11 @@ class ServerArgs:
         if (
             self.attention_backend == "flashmla"
             or self.decode_attention_backend == "flashmla"
+            or self.attention_backend == "dcu_mla"
+            or self.decode_attention_backend == "dcu_mla"
         ):
             logger.warning(
-                "FlashMLA only supports a page_size of 64, change page_size to 64."
+                "FlashMLA/DCU MLA only supports a page_size of 64, change page_size to 64."
             )
             self.page_size = 64
 
@@ -2348,12 +2356,12 @@ class ServerArgs:
                 )
                 self.page_size = 64
 
-        if self.attention_backend == "fa3" and self.kv_cache_dtype == "fp8_e5m2":
-            logger.warning(
-                "FlashAttention3 only supports fp8_e4m3 if using FP8; "
-                "Setting attention backend to triton."
-            )
-            self.attention_backend = "triton"
+        # if self.attention_backend == "fa3" and self.kv_cache_dtype == "fp8_e5m2":
+        #     logger.warning(
+        #         "FlashAttention3 only supports fp8_e4m3 if using FP8; "
+        #         "Setting attention backend to triton."
+        #     )
+        #     self.attention_backend = "triton"
 
         if (
             self.prefill_attention_backend == "fa4"

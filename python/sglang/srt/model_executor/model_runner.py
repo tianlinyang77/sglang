@@ -212,6 +212,7 @@ MLA_ATTENTION_BACKENDS = [
     "triton",
     "flashmla",
     "cutlass_mla",
+    "dcu_mla",
     "trtllm_mla",
     "ascend",
     "nsa",
@@ -220,10 +221,12 @@ MLA_ATTENTION_BACKENDS = [
 CHUNKED_PREFIX_CACHE_SUPPORTED_ATTENTION_BACKENDS = [
     "flashinfer",
     "fa3",
+    "dcu_mla",
     "fa4",
     "flashmla",
     "cutlass_mla",
     "trtllm_mla",
+    "dcu_mla",
 ]
 
 TORCH_DTYPE_TO_KV_CACHE_STR = {
@@ -249,7 +252,7 @@ def add_chunked_prefix_cache_attention_backend(backend_name):
 
 
 # Detect stragger ranks in model loading
-UNBALANCED_MODEL_LOADING_TIMEOUT_S = 480  # leave more time for post data processing
+UNBALANCED_MODEL_LOADING_TIMEOUT_S = 3600
 
 
 logger = logging.getLogger(__name__)
@@ -770,6 +773,121 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
     def model_specific_adjustment(self):
         server_args = self.server_args
+
+        if (
+            server_args.attention_backend == "intel_amx"
+            and server_args.device == "cpu"
+            and not _is_cpu_amx_available
+        ):
+            logger.info(
+                "The current platform does not support Intel AMX, will fallback to torch_native backend."
+            )
+            server_args.attention_backend = "torch_native"
+
+        if (
+            server_args.attention_backend == "intel_xpu"
+            and server_args.device == "xpu"
+            and not _is_xpu_xmx_available
+        ):
+            logger.info(
+                "The current platform does not support Intel XMX, will fallback to triton backend."
+            )
+            server_args.attention_backend = "triton"
+
+        if server_args.prefill_attention_backend is not None and (
+            server_args.prefill_attention_backend
+            == server_args.decode_attention_backend
+        ):  # override the default attention backend
+            server_args.attention_backend = server_args.prefill_attention_backend
+
+        if (
+            getattr(self.model_config.hf_config, "dual_chunk_attention_config", None)
+            is not None
+        ):
+            if server_args.attention_backend is None:
+                server_args.attention_backend = "dual_chunk_flash_attn"
+                logger.info("Dual chunk attention is turned on by default.")
+            elif server_args.attention_backend != "dual_chunk_flash_attn":
+                raise ValueError(
+                    "Dual chunk attention is enabled, but attention backend is set to "
+                    f"{server_args.attention_backend}. Please set it to 'dual_chunk_flash_attn'."
+                )
+
+        if server_args.attention_backend is None:
+            """
+            Auto select the fastest attention backend.
+
+            1. Models with MHA Architecture (e.g: Llama, QWen)
+                1.1 We will turn on FA3 on hopper unless user use spec decode with topk > 1 or page_size > 1.
+                1.2 In other cases, we will use flashinfer if available, otherwise use triton.
+            2. Models with MLA Architecture and using FA3
+                2.1 We will use FA3 backend on hopper.
+                2.2 We will use Flashinfer backend on blackwell.
+                2.3 Otherwise, we will use triton backend.
+            """
+
+            if not self.use_mla_backend:
+                # MHA architecture
+                if (
+                    is_hopper_with_cuda_12_3()
+                    and is_no_spec_infer_or_topk_one(server_args)
+                    and is_fa3_default_architecture(self.model_config.hf_config)
+                ):
+                    server_args.attention_backend = "fa3"
+                elif _is_hip:
+                    server_args.attention_backend = "triton"
+                elif _is_npu:
+                    server_args.attention_backend = "ascend"
+                else:
+                    server_args.attention_backend = (
+                        "flashinfer" if is_flashinfer_available() else "triton"
+                    )
+            else:
+                # MLA architecture
+                if is_hopper_with_cuda_12_3():
+                    server_args.attention_backend = "fa3"
+                elif is_sm100_supported():
+                    server_args.attention_backend = "flashinfer"
+                elif _is_hip:
+                    head_num = self.model_config.get_num_kv_heads(self.tp_size)
+                    # TODO current aiter only support head number 16 or 128 head number
+                    if head_num == 128 or head_num == 16:
+                        server_args.attention_backend = "triton"
+                    else:
+                        server_args.attention_backend = "triton"
+                elif _is_npu:
+                    server_args.attention_backend = "ascend"
+                else:
+                    server_args.attention_backend = "triton"
+            log_info_on_rank0(
+                logger,
+                f"Attention backend not explicitly specified. Use {server_args.attention_backend} backend by default.",
+            )
+        elif self.use_mla_backend:
+            if server_args.device != "cpu":
+                if server_args.attention_backend in MLA_ATTENTION_BACKENDS:
+                    logger.info(
+                        f"MLA optimization is turned on. Use {server_args.attention_backend} backend."
+                    )
+                else:
+                    raise ValueError(
+                        f"Invalid attention backend for MLA: {server_args.attention_backend}"
+                    )
+            else:
+                if server_args.attention_backend != "intel_amx":
+                    raise ValueError(
+                        "MLA optimization not supported on CPU except for intel_amx backend."
+                    )
+
+        # if (
+        #     server_args.attention_backend == "fa3"
+        #     and server_args.kv_cache_dtype == "fp8_e5m2"
+        # ):
+        #     logger.warning(
+        #         "FlashAttention3 only supports fp8_e4m3 if using FP8; "
+        #         "Setting attention backend to triton."
+        #     )
+        #     server_args.attention_backend = "triton"
 
         if server_args.enable_double_sparsity:
             logger.info(
@@ -1828,12 +1946,14 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 self.kv_cache_dtype = self.dtype
         elif self.server_args.kv_cache_dtype == "fp8_e5m2":
             if _is_hip:  # Using natively supported format
-                self.kv_cache_dtype = fp8_dtype
+                # self.kv_cache_dtype = fp8_dtype
+                self.kv_cache_dtype = torch.float8_e5m2
             else:
                 self.kv_cache_dtype = torch.float8_e5m2
         elif self.server_args.kv_cache_dtype == "fp8_e4m3":
             if _is_hip:  # Using natively supported format
-                self.kv_cache_dtype = fp8_dtype
+                # self.kv_cache_dtype = fp8_dtype
+                self.kv_cache_dtype = torch.float8_e4m3fn
             else:
                 self.kv_cache_dtype = torch.float8_e4m3fn
         elif self.server_args.kv_cache_dtype in ("bf16", "bfloat16"):

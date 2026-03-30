@@ -11,8 +11,9 @@ from sglang.srt.mem_cache.base_prefix_cache import BasePrefixCache, EvictParams
 from sglang.srt.mem_cache.memory_pool import HybridReqToTokenPool, ReqToTokenPool
 from sglang.srt.mem_cache.swa_memory_pool import SWATokenToKVPoolAllocator
 from sglang.srt.server_args import get_global_server_args
-from sglang.srt.utils import support_triton
 from sglang.srt.utils.common import ceil_align
+from sglang.srt.utils import support_triton,get_bool_env_var
+from sgl_kernel.kvcacheio import dcu_get_last_loc
 
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req, ScheduleBatch
@@ -129,13 +130,17 @@ def get_last_loc(
     req_pool_indices_tensor: torch.Tensor,
     prefix_lens_tensor: torch.Tensor,
 ) -> torch.Tensor:
-    if (
-        get_global_server_args().attention_backend != "ascend"
-        and get_global_server_args().attention_backend != "torch_native"
-    ):
-        impl = get_last_loc_triton
+    use_sglang_get_last_loc = get_bool_env_var("SGLANG_GET_LAST_LOC", default="true")
+    if use_sglang_get_last_loc:
+        impl = dcu_get_last_loc
     else:
-        impl = get_last_loc_torch
+        if (
+            get_global_server_args().attention_backend != "ascend"
+            and get_global_server_args().attention_backend != "torch_native"
+        ):
+            impl = get_last_loc_triton
+        else:
+            impl = get_last_loc_torch
 
     return impl(req_to_token, req_pool_indices_tensor, prefix_lens_tensor)
 
@@ -360,7 +365,8 @@ def alloc_for_extend(
     else:
         # Paged allocation - build last_loc
         last_loc = [
-            (t[-1:] if len(t) > 0 else torch.tensor([-1], device=batch.device))
+            # (t[-1:] if len(t) > 0 else torch.tensor([-1], device=batch.device))
+            (t[-1:] if len(t) > 0 else batch.loc_tensor)
             for t in prefix_tensors
         ]
         out_cache_loc = alloc_paged_token_slots_extend(

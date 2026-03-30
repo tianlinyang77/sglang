@@ -1,7 +1,7 @@
 # Adapted from https://github.com/vllm-project/vllm/tree/main/vllm/model_executor/layers/quantization/compressed_tensors
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
-
+import os
 import logging
 from contextlib import suppress
 from typing import (
@@ -71,12 +71,15 @@ _is_cuda = is_cuda()
 _is_npu = is_npu()
 _is_hip = is_hip()
 
+from sglang.srt.layers.quantization.kv_cache import BaseKVCacheMethod
+from sglang.srt.layers.quantization.compressed_tensors import quant_ops as ops
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.token_dispatcher import (
         CombineInput,
         StandardDispatchOutput,
     )
     from sglang.srt.models.utils import WeightsMapper
+from sglang.srt.utils import W8a8GetCacheJSON
 
 logger = logging.getLogger(__name__)
 
@@ -203,14 +206,14 @@ class CompressedTensorsConfig(QuantizationConfig):
         self.target_scheme_map["FusedMoE"] = self.target_scheme_map["Linear"]
         self.target_scheme_map["DeepEPMoE"] = self.target_scheme_map["Linear"]
 
-    @property
-    def weight_block_size(self) -> Optional[List[int]]:
-        """Get the weight block size from the quantization config."""
-        if "Linear" in self.target_scheme_map:
-            weights_config = self.target_scheme_map["Linear"].get("weights")
-            if weights_config and hasattr(weights_config, "block_structure"):
-                return weights_config.block_structure
-        return None
+    # @property
+    # def weight_block_size(self) -> Optional[List[int]]:
+    #     """Get the weight block size from the quantization config."""
+    #     if "Linear" in self.target_scheme_map:
+    #         weights_config = self.target_scheme_map["Linear"].get("weights")
+    #         if weights_config and hasattr(weights_config, "block_structure"):
+    #             return weights_config.block_structure
+    #     return None
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> CompressedTensorsConfig:
@@ -560,16 +563,16 @@ class CompressedTensorsConfig(QuantizationConfig):
                 )
 
         if is_activation_quantization_format(self.quant_format):
-            if self._is_fp4a4_nvfp4(weight_quant, input_quant):
-                is_fp4a4_nvfp4_supported = self._check_scheme_supported(
-                    CompressedTensorsW4A4Fp4.get_min_capability(), error=False
-                )
-                if is_fp4a4_nvfp4_supported:
-                    return CompressedTensorsW4A4Fp4()
-                else:
-                    raise NotImplementedError(
-                        "Current platform does not support w4a4 nvfp4 quantization."
-                    )
+            # if self._is_fp4a4_nvfp4(weight_quant, input_quant):
+            #     is_fp4a4_nvfp4_supported = self._check_scheme_supported(
+            #         CompressedTensorsW4A4Fp4.get_min_capability(), error=False
+            #     )
+            #     if is_fp4a4_nvfp4_supported:
+            #         return CompressedTensorsW4A4Fp4()
+            #     else:
+            #         raise NotImplementedError(
+            #             "Current platform does not support w4a4 nvfp4 quantization."
+            #         )
 
             if self._is_fp8_w8a8(weight_quant, input_quant):
                 is_fp8_w8a8_supported = self._check_scheme_supported(
@@ -624,6 +627,17 @@ class CompressedTensorsConfig(QuantizationConfig):
                         strategy=weight_quant.strategy,
                         is_static_input_scheme=False,
                         input_symmetric=input_quant.symmetric,
+                    )
+
+            if self._is_fp4a4_nvfp4(weight_quant, input_quant):
+                is_fp4a4_nvfp4_supported = self._check_scheme_supported(
+                    CompressedTensorsW4A4Fp4.get_min_capability(), error=False
+                )
+                if is_fp4a4_nvfp4_supported:
+                    return CompressedTensorsW4A4Fp4()
+                else:
+                    raise NotImplementedError(
+                        "Current platform does not support w4a4 nvfp4 quantization."
                     )
 
         raise NotImplementedError("No compressed-tensors compatible scheme was found.")
@@ -911,8 +925,33 @@ class CompressedTensorsLinearMethod(LinearMethodBase):
     def __init__(self, quantization_config: CompressedTensorsConfig):
         self.quantization_config = quantization_config
         self.quant_config = quantization_config
+        self.tritonsingleton= W8a8GetCacheJSON()
+        self.w8a8_strategy=int(os.getenv('W8A8_SUPPORT_METHODS', '1'))
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+        n=layer.weight.shape[0]
+        k=layer.weight.shape[1]
+        
+        if self.w8a8_strategy==1:
+            if [n,k] not in self.tritonsingleton.weight_shapes:
+                self.tritonsingleton.weight_shapes.append([n,k])
+                json_file=self.tritonsingleton.get_w8a8json_name(n,k)
+                configs_dict=self.tritonsingleton.get_triton_cache(json_file,n,k)
+                
+                if configs_dict:
+                    self.tritonsingleton.triton_json_dict.update(configs_dict)
+                    
+                    for key, value in configs_dict.items():
+                        m=int(key.split('_')[0])
+                        ops.triton_int8_gemm_helper(m=m,n=n,k=k,per_token_act_quant=True,per_out_channel_weight_quant=True,use_bias=False,device=layer.weight.device,best_config=value)
+        elif self.w8a8_strategy==3:
+            layer.weight.data = layer.weight.data.T
+        else: 
+            weight_data=layer.weight.data
+            _weight=weight_data.T.contiguous().reshape(n,-1)
+            layer.weight.data=_weight
+            
+        self.tritonsingleton.gen_model_json() 
         layer.scheme.process_weights_after_loading(layer)
 
     def create_weights(
@@ -946,6 +985,8 @@ class CompressedTensorsLinearMethod(LinearMethodBase):
         layer: torch.nn.Module,
         x: torch.Tensor,
         bias: Optional[torch.Tensor] = None,
+        input_quant_args: Optional[list[torch.Tensor]] = None,
+        silu_quant_args: Optional[list[torch.Tensor]] = None
     ):
         """
         Use the output of create_weights and the CompressedTensorsScheme
@@ -995,12 +1036,17 @@ class CompressedTensorsFusedMoEMethod(FusedMoEMethodBase):
     def create_moe_runner(
         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
     ):
-        return layer.scheme.create_moe_runner(layer, moe_runner_config)
+        layer.scheme.create_moe_runner(layer, moe_runner_config)
+        if hasattr(layer.scheme, "runner"):
+            self.runner = layer.scheme.runner
 
     def apply(
         self,
         layer: torch.nn.Module,
         dispatch_output: StandardDispatchOutput,
+        bias: Optional[torch.Tensor] = None,
+        i_q: Optional[torch.Tensor] = None,
+        i_s: Optional[torch.Tensor] = None,
     ) -> CombineInput:
         """
         Use the output of create_weights and the CompressedTensorsScheme
@@ -1012,7 +1058,9 @@ class CompressedTensorsFusedMoEMethod(FusedMoEMethodBase):
         scheme = layer.scheme
         if scheme is None:
             raise ValueError("A scheme must be defined for each layer")
-        return scheme.apply_weights(layer, dispatch_output)
+        return scheme.apply_weights(layer, dispatch_output, bias, i_q, i_s)
+
+        #return scheme.apply_weights(layer, dispatch_output, bias, i_q, i_s)
 
     def apply_weights_with_router_logits(
         self,
@@ -1041,3 +1089,46 @@ class CompressedTensorsFusedMoEMethod(FusedMoEMethodBase):
             group_list,
             output_dtype,
         )
+    
+class CompressedTensorsKVCacheMethod(BaseKVCacheMethod):
+    """
+    Supports loading kv-cache scaling factors from compressed-tensors
+    checkpoints.
+    """
+
+    def __init__(self, quant_config: CompressedTensorsConfig):
+        self.validate_kv_cache_scheme(quant_config.kv_cache_scheme)
+        super().__init__(quant_config)
+
+    @staticmethod
+    def validate_kv_cache_scheme(kv_cache_scheme: Optional[dict[str, Any]]):
+        """
+        Validator for the kv cache scheme. Useful for controlling the
+        kv cache quantization schemes, that are being supported in vLLM
+        :param kv_cache_scheme: the compressed-tensors kv cache scheme
+        """
+        if kv_cache_scheme is None:
+            return
+
+        type_ = kv_cache_scheme.get("type")
+        num_bits = kv_cache_scheme.get("num_bits")
+
+        if type_ != "float" and num_bits != 8:
+            raise NotImplementedError(
+                "Currently supported kv cache quantization is "
+                "num_bits=8, type=float, however "
+                f"received num_bits={num_bits}, type={type_}")
+
+        strategy = kv_cache_scheme.get("strategy")
+        if strategy != "tensor":
+            raise NotImplementedError(
+                "Only support per-tensor scaling factor "
+                "for compressed-tensors KV cache. "
+                f"Expected strategy: tensor, found strategy: {strategy}")
+
+        is_symmetric = kv_cache_scheme.get("symmetric")
+        if not is_symmetric:
+            raise NotImplementedError(
+                "Only support symmetric scaling factor "
+                "for compressed-tensors KV cache. "
+                f"However found symmetric: {is_symmetric}")

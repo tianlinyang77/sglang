@@ -101,7 +101,6 @@ def create_triton_backend(runner):
 
         return TritonAttnBackend(runner)
 
-
 @register_attention_backend("torch_native")
 def create_torch_native_backend(runner):
     from sglang.srt.layers.attention.torch_native_backend import TorchNativeAttnBackend
@@ -122,6 +121,11 @@ def create_flashmla_backend(runner):
 
     return FlashMLABackend(runner)
 
+@register_attention_backend("dcu_mla")
+def create_dcu_mla_backend(runner):
+    from sglang.srt.layers.attention.dcu_mla_backend import DCUMLABackend
+
+    return DCUMLABackend(runner)
 
 @register_attention_backend("fa3")
 def create_flashattention_v3_backend(runner):

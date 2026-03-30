@@ -79,6 +79,7 @@ elif _is_hip:
     except ImportError:
         # Fallback: vllm not available, will use forward_native
         _has_vllm_rms_norm = False
+    from lightop import op 
 
 logger = logging.getLogger(__name__)
 
@@ -255,20 +256,32 @@ class RMSNorm(MultiPlatformOp):
             return self.forward_native(x, residual, post_residual_addition)
 
         if not x.is_contiguous():
-            # NOTE: Remove this if aiter kernel supports discontinuous input
             x = x.contiguous()
+
         if residual is not None:
-            out = torch.empty_like(x)
-            residual_out = torch.empty_like(x)
-            if post_residual_addition is not None:
-                residual = residual + post_residual_addition
-            fused_add_rms_norm(
-                out, x, residual_out, residual, self.weight.data, self.variance_epsilon
-            )
-            return out, residual_out
+            try:
+                op.fused_add_rms_norm_opt(
+                    x,
+                    residual,
+                    self.weight.data,
+                    self.variance_epsilon,
+                )
+                return x, residual
+            except TypeError:
+                out = torch.empty_like(x)
+                residual_out = torch.empty_like(x)
+                if post_residual_addition is not None:
+                    residual = residual + post_residual_addition
+                fused_add_rms_norm(
+                    out, x, residual_out, residual, self.weight.data, self.variance_epsilon
+                )
+                return out, residual_out
+                
+
         out = torch.empty_like(x)
-        rms_norm(out, x, self.weight.data, self.variance_epsilon)
+        op.rms_norm_opt(out, x, self.weight.data, self.variance_epsilon)
         return out
+
 
     def forward_native(
         self,

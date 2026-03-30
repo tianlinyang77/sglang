@@ -16,13 +16,16 @@ from sglang.srt.layers.dp_attention import attn_tp_all_gather_into_tensor
 from sglang.srt.layers.layernorm import LayerNorm
 from sglang.srt.layers.quantization.fp8_kernel import is_fp8_fnuz
 from sglang.srt.layers.utils import MultiPlatformOp
-from sglang.srt.utils import add_prefix, ceil_align, is_cuda, is_hip, is_npu
-
+from sglang.srt.utils import add_prefix, ceil_align, is_cuda, is_hip, is_npu,is_dcu
+from lightop import gemmopt
+import logging
+logger = logging.getLogger(__name__)
 global _use_multi_stream
 _is_cuda = is_cuda()
 _is_hip = is_hip()
 _is_npu = is_npu()
 _is_fp8_fnuz = is_fp8_fnuz()
+_is_dcu = is_dcu()
 if _is_cuda:
     try:
         import deep_gemm
@@ -59,6 +62,64 @@ if TYPE_CHECKING:
 
 DUAL_STREAM_TOKEN_THRESHOLD = 1024 if _is_cuda else 0
 
+def ceil_div(x: int, y: int) -> int:
+    return (x + y - 1) // y
+
+def ref_fp8_paged_mqa_logits(q: torch.Tensor, kv_cache: torch.Tensor,
+                             weights: torch.Tensor, context_lens: torch.Tensor, block_tables: torch.Tensor,
+                             max_model_len: int, is_context_lens_2d: bool):
+    batch_size, next_n, heads, dim = q.size()
+    num_block, block_size, _, dim = kv_cache.size()
+    logits = torch.full([batch_size * next_n, max_model_len], float('-inf'), device=q.device, dtype=torch.float32)
+    context_lens = context_lens.tolist()
+    for i in range(batch_size):
+        context_len = context_lens[i]
+        q_offsets = torch.full((next_n, ), context_len, device='cuda', dtype=torch.int32) if is_context_lens_2d \
+                    else torch.arange(context_len - next_n, context_len, device='cuda')
+        weight_slice = weights[i * next_n:(i + 1) * next_n, :].transpose(0, 1).contiguous()
+
+        num_blocks = (context_len + block_size - 1) // block_size
+        block_idxs = block_tables[i][:num_blocks]
+        kv_slice = kv_cache[block_idxs]                 # [num_blocks, block_size, kv_heads, dim]
+        kx = kv_slice.permute(2, 3, 0, 1).reshape(kv_slice.size(2), dim, -1)    # [kv_heads, dim, total_tokens]
+        qx = q[i].transpose(0, 1)                       # q[i]: [next_n, heads, dim] -> [heads, next_n, dim]
+        s = torch.matmul(qx, kx).to(logits.dtype)       # [heads, next_n, dim] @ [1, dim, total_tokens] -> [heads, next_n, total_tokens]
+
+        total_len = num_blocks * block_size
+        k_offsets = torch.arange(0, total_len, device=q.device)
+        mask = (k_offsets[None, :] < context_len) & (k_offsets[None, :] <= q_offsets[:, None])
+        s = torch.where(mask[None, :, :], s, float('-inf'))     # mask shape: [1, next_n, total_tokens]
+        s = torch.relu(s) * weight_slice[..., None]             # weight_slice: [heads, next_n] -> [heads, next_n, 1]
+        s = s.sum(dim=0)                                        # [next_n, total_tokens]
+        logits[i * next_n:(i + 1) * next_n, :total_len] = torch.where(k_offsets[None, :] <= q_offsets[:, None], s, float('-inf'))
+
+    return logits
+
+
+def ref_fp8_mqa_logits(q: torch.Tensor, kv: torch.Tensor, weights: torch.Tensor,
+                       cu_seqlen_ks: torch.Tensor, cu_seqlen_ke: torch.Tensor, cost_only: bool = False):
+    seq_len_kv = kv.shape[0]
+
+    if cost_only:
+        start = cu_seqlen_ks.clamp(min=0, max=seq_len_kv)
+        end   = cu_seqlen_ke.clamp(min=0, max=seq_len_kv)
+        count_ones_per_row = (end - start).clamp(min=0)
+        return count_ones_per_row.sum()
+
+    k = kv
+    q = q.float()
+    k = k.float()
+
+    mask_lo = torch.arange(0, seq_len_kv, device='cuda')[None, :] >= cu_seqlen_ks[:, None]
+    mask_hi = torch.arange(0, seq_len_kv, device='cuda')[None, :] < cu_seqlen_ke[:, None]
+    mask = mask_lo & mask_hi
+
+    score = torch.einsum('mhd,nd->hmn', q, k)
+    logits = (score.relu() * weights.unsqueeze(-1).transpose(0, 1)).sum(dim=0)
+    logits = logits.masked_fill(~mask, float('-inf'))
+
+    cost = mask.sum()
+    return logits, cost
 
 class BaseIndexerMetadata(ABC):
     @abstractmethod
@@ -129,21 +190,57 @@ class BaseIndexerMetadata(ABC):
                 for further processing on sparse attention computation.
                 Don't assume it is the topk indices of the input logits.
         """
+import math
+from scipy.linalg import hadamard
+import torch.nn.functional as F
+# 全局缓存
+_HADAMARD_CACHE = {}
 
+def get_hadamard_matrix(dim, device=None, dtype=torch.float32):
+    """获取缓存的 Hadamard 矩阵"""
+    global _HADAMARD_CACHE
+    key = (dim, str(device), str(dtype))
+
+    if key not in _HADAMARD_CACHE:
+        log_dim = math.ceil(math.log2(dim))
+        dim_padded = 2 ** log_dim
+        h = hadamard(dim_padded, dtype=float)
+        _HADAMARD_CACHE[key] = torch.tensor(h, dtype=dtype, device=device)
+    return _HADAMARD_CACHE[key]
+
+def hadamard_transform_optimized(x, scale=1.0):
+    """
+    x: (..., dim) - dim 固定为 128
+    """
+    x_shape = x.shape
+    dim = x.shape[-1]
+
+    # 获取缓存的 Hadamard 矩阵
+    h_matrix = get_hadamard_matrix(dim, x.device, x.dtype)
+
+    x = x.reshape(-1, dim)
+    log_dim = math.ceil(math.log2(dim))
+    dim_padded = 2 ** log_dim
+
+    if dim != dim_padded:
+        x = F.pad(x, (0, dim_padded - dim))
+
+    out = F.linear(x, h_matrix)
+    out = out * scale
+    return out[..., :dim].reshape(*x_shape)
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     assert x.dtype == torch.bfloat16
     # from sgl_kernel import hadamard_transform
-    if _is_hip:
-        from fast_hadamard_transform import hadamard_transform
-    else:
-        from sglang.jit_kernel.hadamard import hadamard_transform
-
+    # if _is_hip:
+    #     from fast_hadamard_transform import hadamard_transform
+    # else:
+    #     from sglang.jit_kernel.hadamard import hadamard_transform
     hidden_size = x.size(-1)
     assert (
         hidden_size & (hidden_size - 1)
     ) == 0, "Hidden size must be a power of 2 for Hadamard transform."
-    return hadamard_transform(x, scale=hidden_size**-0.5)
+    return  hadamard_transform_optimized(x, scale=hidden_size**-0.5) 
 
 
 class Indexer(MultiPlatformOp):
@@ -185,6 +282,12 @@ class Indexer(MultiPlatformOp):
         if _is_cuda:
             self.sm_count = deep_gemm.get_num_sms()
             self.half_device_sm_count = ceil_align(self.sm_count // 2, 8)
+            pp_size = get_global_server_args().pp_size
+            self.logits_with_pp_recv = pp_size > 1 and not get_pp_group().is_last_rank
+        elif _is_dcu: #nhb
+            device_props = torch.cuda.get_device_properties(0)
+            device_name = device_props.gcnArchName.split(':')[0] if hasattr(device_props, 'gcnArchName') else device_props.name
+            self.sm_count = device_props.multi_processor_count
             pp_size = get_global_server_args().pp_size
             self.logits_with_pp_recv = pp_size > 1 and not get_pp_group().is_last_rank
         else:
@@ -374,11 +477,10 @@ class Indexer(MultiPlatformOp):
         k_rope, _ = torch.split(
             key, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1
         )
-
         _, k_rope = self.rotary_emb(positions, k_rope, k_rope)
         key[..., : self.rope_head_dim] = k_rope.clone()
+        #key[..., : self.rope_head_dim] = k_rope
         key = rotate_activation(key)
-
         return key
 
     def _get_topk_paged(
@@ -394,7 +496,7 @@ class Indexer(MultiPlatformOp):
 
         page_size = forward_batch.token_to_kv_pool.page_size
         # NOTE(dark): blocksize = 64 is hardcoded in deep_gemm
-        if _is_hip:
+        if _is_hip and not _is_dcu:
             assert page_size == 1, "only support page size 1"
             block_tables = metadata.get_page_table_1()
         else:
@@ -423,14 +525,16 @@ class Indexer(MultiPlatformOp):
                 schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
                     seqlens_32, blocksize, self.sm_count
                 )
+        elif _is_dcu: #nhb
+             schedule_metadata = gemmopt.get_paged_mqa_logits_metadata(seqlens_32, blocksize, self.sm_count)
 
         assert len(q_fp8.shape) == 3
         q_fp8 = q_fp8.unsqueeze(1)  # the next_n dim is 1 now
         assert len(kv_cache_fp8.shape) == 2
-        block_kv = 1 if _is_hip else 64
+        block_kv = 1 if _is_hip and not _is_dcu else 64 #nhb
         num_heads_kv = 1
         head_dim_with_sf = 132
-        if _is_hip:
+        if _is_hip and not _is_dcu:
             kv_cache_fp8 = kv_cache_fp8.view(
                 -1, block_kv, num_heads_kv, head_dim_with_sf
             )
@@ -444,7 +548,7 @@ class Indexer(MultiPlatformOp):
         # When attn_tp_size > 1 or in the MAX_LEN padding mode, padding may exist in the hidden states,
         # and it is necessary to extract the actual q length.
         q_offset = sum(metadata.get_nsa_extend_len_cpu())
-        if _is_hip:
+        if _is_hip and not _is_dcu:
             from aiter.ops.triton.pa_mqa_logits import deepgemm_fp8_paged_mqa_logits
 
             batch_size, next_n, heads, _ = q_fp8.shape
@@ -468,6 +572,17 @@ class Indexer(MultiPlatformOp):
                 TotalCuCount=256,
                 WavePerEU=5,
             )
+        elif _is_dcu: #nhb
+
+            logits = gemmopt.paged_mqa_logits(
+                        q_fp8[:q_offset], 
+                        kv_cache_fp8, 
+                        weights[:q_offset],
+                         seqlens_32, 
+                         block_tables,
+                         schedule_metadata, 
+                         max_seq_len, 
+                         clean_logits=True)
         else:
             logits = deep_gemm.fp8_paged_mqa_logits(
                 q_fp8[:q_offset],
@@ -482,6 +597,7 @@ class Indexer(MultiPlatformOp):
 
         # NOTE(dark): logits should be cleaned in topk_transform
         topk_result = metadata.topk_transform(logits, self.index_topk)
+        #logger.info(f"topk_result:{topk_result},logits:{logits.shape}，{logits}")
         # Restore possible padding exist in the hidden states.
         if not _is_hip and q_offset < q_fp8.shape[0]:
             pad_len = q_fp8.shape[0] - q_offset
@@ -492,6 +608,7 @@ class Indexer(MultiPlatformOp):
                 device=topk_result.device,
             )
             topk_result = torch.cat([topk_result, padding], dim=0)
+        #logger.info(f"topk_result22222:{topk_result},logits:{logits.shape}")
         return topk_result
 
     def _should_chunk_mqa_logits(
@@ -528,7 +645,7 @@ class Indexer(MultiPlatformOp):
         assert forward_batch.forward_mode.is_extend_without_speculative()
 
         page_size = forward_batch.token_to_kv_pool.page_size
-        if _is_hip:
+        if _is_hip and not _is_dcu:#nhb
             assert page_size == 1, "only support page size 1"
         else:
             assert page_size == 64, "only support page size 64"
@@ -540,7 +657,7 @@ class Indexer(MultiPlatformOp):
         )
         weights = weights.squeeze(-1)
 
-        if _is_hip:
+        if _is_hip and not _is_dcu: #nhb
             block_tables = metadata.get_page_table_1()
         else:
             block_tables = metadata.get_page_table_64()
@@ -586,11 +703,10 @@ class Indexer(MultiPlatformOp):
         q_offset = ks.shape[0]
         k_offset = k_fp8.shape[0]
         need_chunk, free_mem = self._should_chunk_mqa_logits(q_offset, k_offset, device)
-
         if not need_chunk:
             assert q_fp8[:q_offset].shape[0] != 0
             with self._with_real_sm_count():
-                if _is_hip:
+                if _is_hip and not _is_dcu:
                     from aiter.ops.triton.fp8_mqa_logits import fp8_mqa_logits
 
                     kv, scale = kv_fp8
@@ -598,19 +714,37 @@ class Indexer(MultiPlatformOp):
                         q_fp8[:q_offset], kv, scale, weights[:q_offset], ks, ke
                     )
                 else:
-                    logits = deep_gemm.fp8_mqa_logits(
+                    kv, scale = kv_fp8
+                    from lightop import op
+                    logits = op.mqa_logits(
                         q_fp8[:q_offset],
-                        kv_fp8,
+                        kv,
                         weights[:q_offset],
                         ks,
                         ke,
-                        clean_logits=False,
+                        q_fp8[:q_offset].shape[0],
+                        kv.shape[0],
+                        q_fp8.shape[1],
+                        q_fp8.shape[2],
+                        scale.view(torch.float32).flatten(),
+                        True
                     )
+                    
+                    # logits, _ = ref_fp8_mqa_logits(
+                    #     q_fp8[:q_offset],
+                    #     kv,
+                    #     weights[:q_offset],
+                    #     ks,
+                    #     ke,
+                    #     #scale
+                    # )
+
             assert logits.shape[0] == len(seq_lens_expanded)
             assert logits.shape[1] == k_offset
 
             raw_topk_result = metadata.topk_transform(logits, self.index_topk, ks=ks)
             topk_result[:q_offset] = raw_topk_result
+            #logger.info(f"topk_result:{topk_result},logits:{logits.shape},ke:{ke}")
             return topk_result
 
         # Chunk path
@@ -635,7 +769,7 @@ class Indexer(MultiPlatformOp):
             end = min(start + max_rows, q_offset)
 
             with self._with_real_sm_count():
-                if _is_hip:
+                if _is_hip and not _is_dcu:
                     from aiter.ops.triton.fp8_mqa_logits import fp8_mqa_logits
 
                     kv, scale = kv_fp8
@@ -648,14 +782,24 @@ class Indexer(MultiPlatformOp):
                         ke[start:end],
                     )
                 else:
-                    logits_chunk = deep_gemm.fp8_mqa_logits(
-                        q_fp8[start:end],
-                        kv_fp8,
-                        weights[start:end],
-                        ks[start:end],
-                        ke[start:end],
-                        clean_logits=False,
+                    kv, scale = kv_fp8
+                    import lightop
+                    logits_chunk = lightop.mqa_logits(
+                        q_fp8[:q_offset],
+                        kv,
+                        weights[:q_offset],
+                        ks,
+                        ke,
+                        scale
                     )
+                    # logits_chunk = deep_gemm.fp8_mqa_logits(
+                    #     q_fp8[start:end],
+                    #     kv_fp8,
+                    #     weights[start:end],
+                    #     ks[start:end],
+                    #     ke[start:end],
+                    #     clean_logits=False,
+                    # )
 
             lengths_chunk = seq_lens_expanded[start:end]
 
@@ -684,6 +828,7 @@ class Indexer(MultiPlatformOp):
                 topk_indices_offset_override=topk_offset_chunk,
             )
             topk_result[start:end] = raw_topk_chunk
+           
             start = end
 
         return topk_result
@@ -701,10 +846,10 @@ class Indexer(MultiPlatformOp):
     ) -> Optional[torch.Tensor]:
         assert forward_batch.forward_mode.is_extend_without_speculative()
         x_meta = x[0] if isinstance(x, tuple) else x
-
         # Fast path: only compute and store k cache, skip all q and weights ops
         key = self._get_k_bf16(x, positions, enable_dual_stream)
 
+        #k_fp8, k_scale = act_quant(key, self.block_size, self.scale_fmt)
         if not forward_batch.out_cache_loc.is_contiguous():
             forward_batch.out_cache_loc = forward_batch.out_cache_loc.contiguous()
 
@@ -714,7 +859,6 @@ class Indexer(MultiPlatformOp):
             key=key,
             act_quant=act_quant,
         )
-
         # MHA doesn't need topk_indices
         if not return_indices:
             return None
@@ -1027,10 +1171,8 @@ class Indexer(MultiPlatformOp):
             from sglang.srt.layers.attention.nsa.tilelang_kernel import act_quant
         elif not _is_npu:
             from sglang.srt.layers.attention.nsa.triton_kernel import act_quant
-
         if TYPE_CHECKING:
             assert isinstance(forward_batch.token_to_kv_pool, NSATokenToKVPool)
-
         # When upstream uses fused FP8 RMSNorm+quant, activations may be passed as
         # a tuple like (x_fp8, x_scale[, y]). Use `x_meta` for shape/device queries.
         x_meta = x[0] if isinstance(x, tuple) else x
@@ -1045,7 +1187,6 @@ class Indexer(MultiPlatformOp):
             and q_lora.shape[0] > 0
             and q_lora.shape[0] <= DUAL_STREAM_TOKEN_THRESHOLD
         )
-
         # skip NSA if attention backend choose to skip this batch
         if metadata is None:
             return None
@@ -1053,10 +1194,10 @@ class Indexer(MultiPlatformOp):
         # Determine if should skip topk based on sequence length
         # We can only skip the logits computation if cuda graph is not involved
         skip_logits_computation = False
-        if forward_batch.forward_mode.is_extend_without_speculative():
-            if forward_batch.seq_lens_cpu is not None:
-                max_kv_len = forward_batch.seq_lens_cpu.max().item()
-                skip_logits_computation = max_kv_len <= self.index_topk
+        # if forward_batch.forward_mode.is_extend_without_speculative():
+        #     if forward_batch.seq_lens_cpu is not None:
+        #         max_kv_len = forward_batch.seq_lens_cpu.max().item()
+        #         skip_logits_computation = max_kv_len <= self.index_topk
 
         # Optimization: fast path when skipping topk computation
         if skip_logits_computation and (not self.nsa_enable_prefill_cp):
@@ -1070,7 +1211,6 @@ class Indexer(MultiPlatformOp):
                 metadata,
                 return_indices,
             )
-
         if enable_dual_stream and forward_batch.forward_mode.is_decode_or_idle():
             current_stream = torch.cuda.current_stream()
             self.alt_stream.wait_stream(current_stream)
@@ -1148,6 +1288,14 @@ class Indexer(MultiPlatformOp):
                 x_for_gate = x
 
             weights = self._get_logits_head_gate(x_for_gate, q_scale)
+        # if not forward_batch.out_cache_loc.is_contiguous():
+        #     forward_batch.out_cache_loc = forward_batch.out_cache_loc.contiguous()
+        # forward_batch.token_to_kv_pool.set_index_k_scale_buffer(
+        #     layer_id=layer_id,
+        #     loc=forward_batch.out_cache_loc,
+        #     index_k=k_fp8,
+        #     index_k_scale=k_scale,
+        # )
 
         if _is_cuda or _is_hip:
             assert forward_batch.seq_lens_cpu is not None
