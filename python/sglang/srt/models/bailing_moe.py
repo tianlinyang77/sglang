@@ -95,7 +95,7 @@ _is_cuda = is_cuda()
 _is_dcu = is_dcu()
 
 _use_fused_bailing_silu_mul_fp8_quant = get_bool_env_var("SGLANG_USE_FUSED_BAILING_SILU_MUL_FP8_QUANT")
-_use_fused_bailing_rms_rotary = get_bool_env_var("SGLANG_USE_FUSED_BAILING_RMS_ROTARY")
+_use_fused_bailing_rms_rotary = get_bool_env_var("SGLANG_USE_FUSED_RMS_ROTARY")
 _use_fused_bailing_rms_quant = get_bool_env_var("SGLANG_USE_FUSED_BAILING_RMS_QUANT")
 _use_fused_bailing_moe_sum_add = get_bool_env_var("SGLANG_USE_FUSED_BAILING_MOE_SUM_ADD", "true")
 

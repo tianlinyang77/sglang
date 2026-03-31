@@ -32,7 +32,7 @@ from sglang.srt.models.utils import apply_qk_norm
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import add_prefix, is_cuda, is_dcu, is_npu, get_bool_env_var
 
-_use_fused_qwen_bailing_rotary = get_bool_env_var("SGLANG_USE_FUSED_BAILING_RMS_ROTARY")
+_use_fused_qwen_bailing_rotary = get_bool_env_var("SGLANG_USE_FUSED_RMS_ROTARY")
 
 Qwen3Config = None
 

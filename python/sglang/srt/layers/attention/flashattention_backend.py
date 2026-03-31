@@ -42,7 +42,7 @@ from sgl_kernel import merge_state_v2
 from sglang.srt.layers.attention.flashattention_interface import flash_attn_varlen_func, flash_attn_with_kvcache, vllm_flash_attn_varlen_func, vllm_flash_attn_with_kvcache
 from sglang.srt.utils import get_bool_env_var
 _use_fused_rmsnorm_rope = get_bool_env_var("SGLANG_USE_FUSED_RMSNORM_ROPE")
-_use_fused_bailing_rms_rotary = get_bool_env_var("SGLANG_USE_FUSED_BAILING_RMS_ROTARY")
+_use_fused_bailing_rms_rotary = get_bool_env_var("SGLANG_USE_FUSED_RMS_ROTARY")
 _kv_layout_dcu_fa = get_bool_env_var("SGLANG_KV_LAYOUT_DCU_FA", default="true")
 
 def is_nmz_fp8(dtype: torch.dtype) -> bool:
