@@ -177,7 +177,7 @@ from sglang.srt.distributed import (
 from enum import IntEnum, auto
 import tqdm
 from sglang.srt.layers.attention.tbo_backend import TboAttnBackend
-
+from sglang.srt.compilation.piecewise_context_manager import is_in_piecewise_cuda_graph
 _is_dcu = is_dcu()
 _is_hip = is_hip()
 _is_cuda = is_cuda()

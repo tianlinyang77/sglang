@@ -52,7 +52,7 @@ _is_cpu = is_cpu()
 _is_dcu = is_dcu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
-if _is_cuda or _is_dcu:
+if _is_cuda:
     from sgl_kernel import sgl_per_tensor_quant_fp8, sgl_per_token_quant_fp8
 
     # Temporary

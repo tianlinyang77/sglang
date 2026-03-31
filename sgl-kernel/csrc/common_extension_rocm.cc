@@ -258,8 +258,6 @@ TORCH_LIBRARY_EXPAND(sgl_kernel, m) {
    */
   m.def("weak_ref_tensor(Tensor tensor) -> Tensor");
   m.impl("weak_ref_tensor", torch::kCUDA, &weak_ref_tensor);
-  m.def("gptq_marlin_repack(Tensor b_q_weight, Tensor perm, int size_k, int size_n, int num_bits) -> Tensor");
-  m.impl("gptq_marlin_repack", torch::kCUDA,&gptq_marlin_repack);
 }
 
 REGISTER_EXTENSION(common_ops)

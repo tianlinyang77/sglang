@@ -54,7 +54,6 @@ sources = [
     "csrc/speculative/eagle_utils.cu",
     "csrc/kvcacheio/transfer.cu",
     "csrc/attention/merge_attn_states.cu",
-    "csrc/gemm/marlin/gptq_marlin_repack.cu",
     "csrc/memory/weak_ref_tensor.cpp",
     "csrc/elementwise/pos_enc.cu",
     #"csrc/sgl_diffusion/elementwise/timestep_embedding.cu",

@@ -2,6 +2,7 @@
 
 import ctypes
 import logging
+import os
 from contextlib import contextmanager
 from functools import partial
 from typing import Any, List, Optional, Union
@@ -16,6 +17,7 @@ from sglang.srt.distributed.device_communicators.cuda_wrapper import CudaRTLibra
 from sglang.srt.distributed.device_communicators.custom_all_reduce_utils import (
     can_use_custom_all_reduce_with_nvlink,
     is_weak_contiguous,
+    is_full_nvlink,
 )
 from sglang.srt.environ import envs
 from sglang.srt.utils import (
@@ -25,6 +27,7 @@ from sglang.srt.utils import (
     is_musa,
     log_info_on_rank0,
 )
+from sglang.srt.distributed.parallel_state import in_the_same_node_as
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()

@@ -887,31 +887,31 @@ class DecodeTransferQueue:
             else 0
         )
 
-        if _is_fake_transfer(decode_req.req, self.scheduler.server_args):
-            pass
-        elif actual_room == 0:
-            # Case 1: Metadata not ready yet (actual_room == 0)
-            # Keep request in queue and wait for next poll
-            return False
-        elif actual_room != expected_room:
-            # Case 2: Real corruption detected (mismatch)
-            # Abort the request and remove from the queue
-            error_msg = (
-                f"Context corruption detected: Request {decode_req.req.rid} "
-                f"(bootstrap_room={expected_room}) received metadata from "
-                f"bootstrap_room={actual_room}. "
-                f"Metadata buffer index: {idx}. "
-                f"This indicates metadata buffer index collision."
-            )
-            logger.error(error_msg)
-            prepare_abort(
-                decode_req.req,
-                "Metadata corruption detected - bootstrap_room mismatch",
-                status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
-            decode_req.kv_receiver.clear()
-            decode_req.kv_receiver = None
-            return True
+        # if _is_fake_transfer(decode_req.req, self.scheduler.server_args):
+        #     pass
+        # elif actual_room == 0:
+        #     # Case 1: Metadata not ready yet (actual_room == 0)
+        #     # Keep request in queue and wait for next poll
+        #     return False
+        # elif actual_room != expected_room:
+        #     # Case 2: Real corruption detected (mismatch)
+        #     # Abort the request and remove from the queue
+        #     error_msg = (
+        #         f"Context corruption detected: Request {decode_req.req.rid} "
+        #         f"(bootstrap_room={expected_room}) received metadata from "
+        #         f"bootstrap_room={actual_room}. "
+        #         f"Metadata buffer index: {idx}. "
+        #         f"This indicates metadata buffer index collision."
+        #     )
+        #     logger.error(error_msg)
+        #     prepare_abort(
+        #         decode_req.req,
+        #         "Metadata corruption detected - bootstrap_room mismatch",
+        #         status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+        #     )
+        #     decode_req.kv_receiver.clear()
+        #     decode_req.kv_receiver = None
+        #     return True
 
         # Case 3: Success - commit the transfer
         decode_req.req.output_ids.append(output_id[0].item())
