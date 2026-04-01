@@ -80,6 +80,7 @@ elif _is_hip:
         # Fallback: vllm not available, will use forward_native
         _has_vllm_rms_norm = False
     from lightop import op 
+    from lightop import gemma_fused_add_rmsnorm as gemma_fused_add_rmsnorm_dcu
 
 logger = logging.getLogger(__name__)
 
@@ -538,12 +539,10 @@ class GemmaRMSNorm(MultiPlatformOp):
             if not x.is_contiguous():
                 x = x.contiguous()
             if residual is not None:
-                out = torch.empty_like(x)
-                residual_out = torch.empty_like(x)
                 if post_residual_addition is not None:
                     residual = residual + post_residual_addition
-                fused_add_rms_norm(
-                    out, x, residual_out, residual, w, self.variance_epsilon
+                out, residual_out=gemma_fused_add_rmsnorm_dcu(
+                    x, residual, self.weight.data, self.variance_epsilon
                 )
                 return out, residual_out
             out = torch.empty_like(x)
