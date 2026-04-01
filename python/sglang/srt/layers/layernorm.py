@@ -36,6 +36,7 @@ from sglang.srt.utils import (
     is_hip,
     is_npu,
     is_xpu,
+    is_dcu
 )
 
 _is_cuda = is_cuda()
@@ -46,6 +47,7 @@ _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _is_xpu = is_xpu()
+_is_dcu = is_dcu()
 _flashinfer_layernorm_available = False
 
 if _is_cuda or _is_xpu:
@@ -79,6 +81,7 @@ elif _is_hip:
     except ImportError:
         # Fallback: vllm not available, will use forward_native
         _has_vllm_rms_norm = False
+if _is_dcu:
     from lightop import op 
     from lightop import gemma_fused_add_rmsnorm as gemma_fused_add_rmsnorm_dcu
 
@@ -541,10 +544,18 @@ class GemmaRMSNorm(MultiPlatformOp):
             if residual is not None:
                 if post_residual_addition is not None:
                     residual = residual + post_residual_addition
-                out, residual_out=gemma_fused_add_rmsnorm_dcu(
-                    x, residual, self.weight.data, self.variance_epsilon
+                if is_dcu:
+                    out, residual_out=gemma_fused_add_rmsnorm_dcu(
+                        x, residual, self.weight.data, self.variance_epsilon
+                    )
+                    return out, residual_out
+                else:
+                    out = torch.empty_like(x)
+                    residual_out = torch.empty_like(x)
+                    fused_add_rms_norm(
+                    out, x, residual_out, residual, w, self.variance_epsilon
                 )
-                return out, residual_out
+                    return out, residual_out
             out = torch.empty_like(x)
             rms_norm(out, x, w, self.variance_epsilon)
             return out
