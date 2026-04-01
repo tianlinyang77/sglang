@@ -555,7 +555,7 @@ class GemmaRMSNorm(MultiPlatformOp):
                     fused_add_rms_norm(
                     out, x, residual_out, residual, w, self.variance_epsilon
                 )
-                return out, residual_out
+                    return out, residual_out
             out = torch.empty_like(x)
             rms_norm(out, x, w, self.variance_epsilon)
             return out
