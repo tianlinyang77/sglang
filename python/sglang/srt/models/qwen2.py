@@ -127,6 +127,16 @@ class Qwen2Attention(nn.Module):
         assert self.total_num_heads % tp_size == 0
         self.num_heads = self.total_num_heads // tp_size
         self.total_num_kv_heads = num_kv_heads
+        self.layer_id = layer_id
+        self.page_size=64
+        if get_global_server_args().kv_cache_dtype == "fp8_e4m3":
+            self.kv_cache_dtype = torch.float8_e4m3fn
+        elif get_global_server_args().kv_cache_dtype == "fp8_e5m2":
+            self.kv_cache_dtype = torch.float8_e5m2
+        elif get_global_server_args().kv_cache_dtype in ("bf16", "bfloat16"):
+            self.kv_cache_dtype = torch.bfloat16
+        else:
+            self.kv_cache_dtype = torch.bfloat16
         if self.total_num_kv_heads >= tp_size:
             # Number of KV heads is greater than TP size, so we partition
             # the KV heads across multiple tensor parallel GPUs.
