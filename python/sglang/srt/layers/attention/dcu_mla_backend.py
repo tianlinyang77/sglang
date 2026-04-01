@@ -29,7 +29,7 @@ try:
         try:
             from flash_mla import (
                 flash_mla_with_kvcache,
-                flash_mla_with_kvcache_quantization,
+                # flash_mla_with_kvcache_quantization,
                 # get_mla_metadata,
                 get_mla_decoding_metadata_dense_fp8 as get_mla_metadata,
                 flash_mla_with_kvcache_fp8, # only support fp8_e4m3

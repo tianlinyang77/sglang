@@ -999,7 +999,25 @@ class CompressedTensorsLinearMethod(LinearMethodBase):
         scheme = layer.scheme
         if scheme is None:
             raise ValueError("A scheme must be defined for each layer")
-        return scheme.apply_weights(layer, x, bias=bias)
+        apply_kwargs = {
+            "layer": layer,
+            "x": x,
+            "bias": bias,
+        }
+
+        supported_kwargs = getattr(scheme, "_apply_weights_supported_kwargs", None)
+        if supported_kwargs is None:
+            supported_kwargs = frozenset(
+                inspect.signature(scheme.apply_weights).parameters
+            )
+            scheme._apply_weights_supported_kwargs = supported_kwargs
+
+        if "input_quant_args" in supported_kwargs and input_quant_args is not None:
+            apply_kwargs["input_quant_args"] = input_quant_args
+        if "silu_quant_args" in supported_kwargs and silu_quant_args is not None:
+            apply_kwargs["silu_quant_args"] = silu_quant_args
+
+        return scheme.apply_weights(**apply_kwargs)
 
 
 class CompressedTensorsFusedMoEMethod(FusedMoEMethodBase):
