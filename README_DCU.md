@@ -181,6 +181,7 @@ python3 -m sglang.launch_server --model-path DeepSeek-R1-Channel-INT8 \
 --kv-cache-dtype fp8_e4m3 --host ${decode_ip} --port 30000 --trust-remote-code \
 --dist-init-addr ${decode_master_ip}:5000 --nnodes 1 --node-rank 0 --dtype bfloat16  \
 --tp-size 8 --dp-size 2 --mem-fraction-static 0.85 \
+--moe-dense-tp-size 1 --enable-dp-lm-head \
 --attention-backend dcu_mla --enable-dp-attention --moe-a2a-backend deepep  \
 --ep-size 8 --deepep-mode low_latency \
 --disaggregation-ib-device mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
@@ -193,6 +194,7 @@ python3 -m sglang.launch_server --model-path DeepSeek-R1-Channel-INT8 \
 --kv-cache-dtype fp8_e4m3 --host ${node1_ip} --port 30000 --trust-remote-code \
 --dist-init-addr ${node1_ip}:5000 --nnodes 2 --node-rank 0 --dtype bfloat16  \
 --tp-size 16 --dp-size 16 --mem-fraction-static 0.85 \
+--moe-dense-tp-size 1 --enable-dp-lm-head \
 --attention-backend dcu_mla --enable-dp-attention --moe-a2a-backend deepep  \
 --ep-size 16 --deepep-mode low_latency \
 --disaggregation-ib-device mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
@@ -203,6 +205,7 @@ python3 -m sglang.launch_server --model-path DeepSeek-R1-Channel-INT8 \
 --kv-cache-dtype fp8_e4m3 --host ${node2_ip} --port 30000 --trust-remote-code \
 --dist-init-addr ${node1_ip}:5000 --nnodes 2 --node-rank 1 --dtype bfloat16  \
 --tp-size 16 --dp-size 16 --mem-fraction-static 0.85 \
+--moe-dense-tp-size 1 --enable-dp-lm-head \
 --attention-backend dcu_mla --enable-dp-attention --moe-a2a-backend deepep  \
 --ep-size 16 --deepep-mode low_latency \
 --disaggregation-ib-device mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
