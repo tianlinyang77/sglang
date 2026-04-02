@@ -143,7 +143,7 @@ curl -X POST http://localhost:30002/v1/completions \
     "temperature": 0
   }'
 ```
-#### low_latency
+#### low_latency （使用deepep）
 prefill部分同上面normal部分的prefill
 
 ##### decode  
