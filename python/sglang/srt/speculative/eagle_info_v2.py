@@ -250,26 +250,26 @@ class EagleVerifyInputV2Mixin:
                 )
                 batch.mamba_track_mask = None
                 batch.mamba_track_seqlens = None
-            # if self.use_sglang_assign_extend_cache_locs:
-            #     dcu_assign_extend_cache_locs(
-            #         batch.req_pool_indices,         
-            #         req_to_token_pool.req_to_token,
-            #         batch.seq_lens,
-            #         batch.seq_lens + self.draft_token_num,
-            #         batch.out_cache_loc,
-            #         req_to_token_pool.req_to_token.shape[1],
-            #         bs,
-            #     )
-            # else:
-            #     assign_extend_cache_locs[(bs,)](
-            #         batch.req_pool_indices,
-            #         req_to_token_pool.req_to_token,
-            #         batch.seq_lens,
-            #         batch.seq_lens + self.draft_token_num,
-            #         batch.out_cache_loc,
-            #         req_to_token_pool.req_to_token.shape[1],
-            #         next_power_of_2(bs),
-            #     )
+            if self.use_sglang_assign_extend_cache_locs:
+                dcu_assign_extend_cache_locs(
+                    batch.req_pool_indices,
+                    req_to_token_pool.req_to_token,
+                    batch.seq_lens,
+                    batch.seq_lens + self.draft_token_num,
+                    batch.out_cache_loc,
+                    req_to_token_pool.req_to_token.shape[1],
+                    bs,
+                )
+            else:
+                assign_extend_cache_locs[(bs,)](
+                    batch.req_pool_indices,
+                    req_to_token_pool.req_to_token,
+                    batch.seq_lens,
+                    batch.seq_lens + self.draft_token_num,
+                    batch.out_cache_loc,
+                    req_to_token_pool.req_to_token.shape[1],
+                    next_power_of_2(bs),
+                )
 
         # Get a forward batch
         batch.forward_mode = (

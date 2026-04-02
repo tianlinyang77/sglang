@@ -2733,6 +2733,11 @@ class ModelRunner(ModelRunnerKVCacheMixin):
     ) -> ModelRunnerOutput:
         self.forward_pass_id += 1
 
+        if os.getenv('MODEL_DUMP'):
+            from msprobe.pytorch import PrecisionDebugger
+            debugger = PrecisionDebugger(config_path='/home/scripts/acc_test/model_dump/config.json')
+            debugger.start(model=self.model)
+
         with get_global_expert_distribution_recorder().with_forward_pass(
             self.forward_pass_id,
             forward_batch,
@@ -2779,6 +2784,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         if dumper.may_enable:
             dumper.step()
+
+        if os.getenv('MODEL_DUMP'):
+            debugger.stop()
+            debugger.step()
 
         return output
 
