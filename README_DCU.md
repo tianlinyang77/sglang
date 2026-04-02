@@ -57,6 +57,174 @@ pip install -e "python[all_hip]" --no-deps --no-build-isolation --no-index
 ## 验证
 - python -c "import sglang; print(sglang.\_\_version__)",
 
+## PD 分离
+
+### Requirements
+
+```bash
+pip list | grep mooncake-transfer-engine
+```
+
+### Usage
+
+#### Normal
+
+**加载环境变量：**
+
+```Bash
+export USE_DCU_CUSTOM_ALLREDUCE=1
+export MC_TOPO_FILE_FORCE=./mc_topo.config
+export MC_ALLOWED_IBV_DEVICES=mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
+#export MC_IB_GID_INDEX=0 #Roce网络需要设置
+```
+mc_topo.config
+
+```YAML
+0000:9f:00.0 mlx5_2 hip:0
+0000:57:00.0 mlx5_3 hip:1
+0000:5e:00.0 mlx5_4 hip:2
+0000:05:00.0 mlx5_5 hip:3
+0000:e5:00.0 mlx5_6 hip:4
+0000:c1:00.0 mlx5_7 hip:5
+0000:cc:00.0 mlx5_8 hip:6
+0000:b1:00.0 mlx5_9 hip:7
+```
+**DeepSeek-R1-Channel-INT8 模型示例**
+
+##### prefill 
+```bash
+python -m sglang.launch_server \
+  --model-path DeepSeek-R1-Channel-INT8 \
+  --disaggregation-ib-device mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9 \
+  --disaggregation-mode prefill \
+  --host ${prefill_ip} \
+  --port 30000 \
+  --trust-remote-code \
+  --dist-init-addr ${prefill_master_ip}:5000 \
+  --nnodes 1 \
+  --node-rank 0 \
+  --tp-size 2 \
+  --pp-size 4 \
+  --mem-fraction-static 0.9 \
+  --attention-backend dcu_mla 
+```
+
+##### decode  
+```bash
+python -m sglang.launch_server \
+  --model-path DeepSeek-R1-Channel-INT8  \
+  --disaggregation-ib-device mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9 \
+  --disaggregation-mode decode \
+  --host ${decode_ip} \
+  --port 30000 \
+  --trust-remote-code \
+  --dist-init-addr ${decode_master_ip}:5000 \
+  --nnodes 1 \
+  --node-rank 0 \
+  --tp-size 8 \
+  --mem-fraction-static 0.9 \
+  --attention-backend dcu_mla \
+  --dtype bfloat16 \
+  --quantization slimquant_marlin
+```
+##### 启动路由：
+```bash
+python3 -m sglang_router.launch_router --pd-disaggregation --prefill http://${prefill_ip}:30000 --decode http://${decode_ip}:30000 --policy round_robin --port 30002
+```
+##### 验证输出结果
+在另一个终端中，使用以下命令验证输出结果：
+```bash
+curl -X POST http://localhost:30002/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "prompt": "介绍一下深度学习的发展",
+    "max_tokens": 300,
+    "temperature": 0
+  }'
+```
+#### low_latency
+prefill部分同> prefill
+
+##### decode  
+```bash
+# deep_ep
+#export ROCSHMEM_DISABLE_HDP_FLUSH=1 #xdp使用
+export ROCSHMEM_GDA_NUM_QPS_DEFAULT_CTX=288
+export ROCSHMEM_HEAP_SIZE=3173741824
+export SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=128
+export DEEPEP_ENABLE_LL_DISPATCH_OPT=1
+export ROCSHMEM_ALLOWED_IBV_DEVICES=mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
+export ROCSHMEM_TOPO_FILE_FORCE=./topo.config   // 与上面文件一致
+
+# mooncake
+export MC_TOPO_FILE_FORCE=./mc_topo.config      // 与上面文件一致
+export MC_ALLOWED_IBV_DEVICES=mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
+#export MC_IB_GID_INDEX=0 #Roce网络需要设置
+```
+topo.config
+
+```YAML
+0000:9f:00.0 mlx5_2 2
+0000:57:00.0 mlx5_3 3
+0000:5e:00.0 mlx5_4 4
+0000:05:00.0 mlx5_5 5
+0000:e5:00.0 mlx5_6 6
+0000:c1:00.0 mlx5_7 7
+0000:cc:00.0 mlx5_8 8
+0000:b1:00.0 mlx5_9 9
+```
+单机ep8dp2部署示例
+```bash
+python3 -m sglang.launch_server --model-path DeepSeek-R1-Channel-INT8 \
+--disaggregation-mode decode --quantization slimquant_marlin \
+--kv-cache-dtype fp8_e4m3 --host ${decode_ip} --port 30000 --trust-remote-code \
+--dist-init-addr ${decode_master_ip}:5000 --nnodes 1 --node-rank 0 --dtype bfloat16  \
+--tp-size 8 --dp-size 2 --mem-fraction-static 0.85 \
+--attention-backend dcu_mla --enable-dp-attention --moe-a2a-backend deepep  \
+--ep-size 8 --deepep-mode low_latency \
+--disaggregation-ib-device mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
+```
+多机ep16dp16部署示例
+```bash
+#node1 作为主节点
+python3 -m sglang.launch_server --model-path DeepSeek-R1-Channel-INT8 \
+--disaggregation-mode decode --quantization slimquant_marlin \
+--kv-cache-dtype fp8_e4m3 --host ${node1_ip} --port 30000 --trust-remote-code \
+--dist-init-addr ${node1_ip}:5000 --nnodes 2 --node-rank 0 --dtype bfloat16  \
+--tp-size 16 --dp-size 16 --mem-fraction-static 0.85 \
+--attention-backend dcu_mla --enable-dp-attention --moe-a2a-backend deepep  \
+--ep-size 16 --deepep-mode low_latency \
+--disaggregation-ib-device mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
+
+#node2
+python3 -m sglang.launch_server --model-path DeepSeek-R1-Channel-INT8 \
+--disaggregation-mode decode --quantization slimquant_marlin \
+--kv-cache-dtype fp8_e4m3 --host ${node2_ip} --port 30000 --trust-remote-code \
+--dist-init-addr ${node1_ip}:5000 --nnodes 2 --node-rank 1 --dtype bfloat16  \
+--tp-size 16 --dp-size 16 --mem-fraction-static 0.85 \
+--attention-backend dcu_mla --enable-dp-attention --moe-a2a-backend deepep  \
+--ep-size 16 --deepep-mode low_latency \
+--disaggregation-ib-device mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
+```
+
+##### 启动路由：
+```bash
+python3 -m sglang_router.launch_router --pd-disaggregation --prefill http://${prefill_ip}:30000 --decode http://${decode_ip}:30000 --policy round_robin --port 30002
+```
+##### 验证输出结果
+在另一个终端中，使用以下命令验证输出结果：
+```bash
+curl -X POST http://localhost:30002/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "prompt": "介绍一下深度学习的发展",
+    "max_tokens": 300,
+    "temperature": 0
+  }'
+```
+
 ## Known Issue
 - 无
 
