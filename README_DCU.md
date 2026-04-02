@@ -71,7 +71,7 @@ pip list | grep mooncake-transfer-engine
 
 **加载环境变量：**
 
-```Bash
+```bash
 export USE_DCU_CUSTOM_ALLREDUCE=1
 export MC_TOPO_FILE_FORCE=./mc_topo.config
 export MC_ALLOWED_IBV_DEVICES=mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7,mlx5_8,mlx5_9
@@ -144,7 +144,7 @@ curl -X POST http://localhost:30002/v1/completions \
   }'
 ```
 #### low_latency
-prefill部分同> prefill
+prefill部分同上面normal部分的prefill
 
 ##### decode  
 ```bash
