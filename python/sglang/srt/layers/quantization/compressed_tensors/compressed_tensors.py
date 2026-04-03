@@ -930,8 +930,12 @@ class CompressedTensorsLinearMethod(LinearMethodBase):
         self.w8a8_strategy=int(os.getenv('W8A8_SUPPORT_METHODS', '1'))
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        n=layer.weight.shape[0]
-        k=layer.weight.shape[1]
+        if hasattr(layer, 'weight'):
+            n=layer.weight.shape[0]
+            k=layer.weight.shape[1]
+        elif hasattr(layer, 'weight_packed'):
+            n=layer.weight_packed.shape[0]
+            k=layer.weight_packed.shape[1]
         
         if self.w8a8_strategy==1:
             if [n,k] not in self.tritonsingleton.weight_shapes:
