@@ -23,9 +23,8 @@ from sglang.srt.utils import is_dcu
 _is_dcu = is_dcu()
 is_nmz_fp8 = False
 try:
-    props = torch.cuda.get_device_properties(0)
-    gcn_arch = getattr(props, "gcnArchName", "")
-    if _is_dcu and "gfx938" in gcn_arch:
+    
+    if _is_dcu:
         try:
             from flash_mla import (
                 flash_mla_with_kvcache,
