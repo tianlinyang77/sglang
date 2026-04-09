@@ -38,8 +38,7 @@ _is_xpu = is_xpu()
 _is_dcu = is_dcu()
 
 if _is_cuda:
-    from flashinfer.prefill import cudnn_batch_prefill_with_kv_cache
-
+    from flashinfer.prefill import cudnn_batch_prefill_with_kv_cache    
     try:
         from sgl_kernel.flash_attn import flash_attn_varlen_func
 
@@ -58,7 +57,7 @@ if _is_cuda:
 
 if _is_dcu:
     from sglang.srt.layers.attention.flashattention_interface import flash_attn_varlen_func
-
+    flash_attn_func = flash_attn_varlen_func
 if _is_npu:
     import torch_npu
 
