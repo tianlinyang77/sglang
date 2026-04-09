@@ -49,7 +49,7 @@ from sglang.srt.utils import (
 )
 from lmslim import quant_ops
 from lmslim.quantize.quant_ops import BlockSize
-
+from lmslim.layers.gemm.fp8_utils import per_token_group_quant_fp8 as per_token_group_quant_fp8_dcu
 logger = logging.getLogger(__name__)
 
 _is_hip = is_hip()
@@ -821,7 +821,7 @@ def hipblaslt_w8a8_block_fp8_linear(
 ) -> torch.Tensor:
         input_2d = input.view(-1, input.shape[-1])
         output_shape = [*input.shape[:-1], weight.shape[0]]
-        q_input, input_scale = per_token_group_quant_fp8(
+        q_input, input_scale = per_token_group_quant_fp8_dcu(
             input_2d, block_size[1], column_major_scales=False
         )
         enum_block_size = BlockSize.block_128x128
