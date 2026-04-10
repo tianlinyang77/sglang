@@ -17,7 +17,10 @@ from sglang.srt.layers.layernorm import LayerNorm
 from sglang.srt.layers.quantization.fp8_kernel import is_fp8_fnuz
 from sglang.srt.layers.utils import MultiPlatformOp
 from sglang.srt.utils import add_prefix, ceil_align, is_cuda, is_hip, is_npu,is_dcu
+
+import lightop
 from lightop import gemmopt
+from lightop import op
 import logging
 logger = logging.getLogger(__name__)
 global _use_multi_stream
@@ -578,11 +581,12 @@ class Indexer(MultiPlatformOp):
                         q_fp8[:q_offset], 
                         kv_cache_fp8, 
                         weights[:q_offset],
-                         seqlens_32, 
-                         block_tables,
-                         schedule_metadata, 
-                         max_seq_len, 
-                         clean_logits=True)
+                        seqlens_32, 
+                        block_tables,
+                        schedule_metadata, 
+                        max_seq_len, 
+                        clean_logits=True
+                    )
         else:
             logits = deep_gemm.fp8_paged_mqa_logits(
                 q_fp8[:q_offset],
@@ -715,7 +719,6 @@ class Indexer(MultiPlatformOp):
                     )
                 else:
                     kv, scale = kv_fp8
-                    from lightop import op
                     logits = op.mqa_logits(
                         q_fp8[:q_offset],
                         kv,
@@ -783,7 +786,6 @@ class Indexer(MultiPlatformOp):
                     )
                 else:
                     kv, scale = kv_fp8
-                    import lightop
                     logits_chunk = lightop.mqa_logits(
                         q_fp8[:q_offset],
                         kv,
@@ -1002,14 +1004,25 @@ class Indexer(MultiPlatformOp):
             ke = ks + ke_offset
 
             with self._with_real_sm_count():
-                logits = deep_gemm.fp8_mqa_logits(
-                    q_fp8,
-                    kv_fp8,
-                    weights,
-                    ks,
-                    ke,
-                    clean_logits=False,
-                )
+                if _is_dcu:
+                    kv, scale = kv_fp8
+                    logits = lightop.mqa_logits(
+                        q_fp8,
+                        kv,
+                        weights,
+                        ks,
+                        ke,
+                        scale,
+                    )               
+                else:
+                    logits = deep_gemm.fp8_mqa_logits(
+                        q_fp8,
+                        kv_fp8,
+                        weights,
+                        ks,
+                        ke,
+                        clean_logits=False,
+                    )
             actual_seq_q = torch.tensor([actual_seq_q], dtype=torch.int32).to(
                 device="cuda", non_blocking=True
             )

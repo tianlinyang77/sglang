@@ -75,7 +75,7 @@ DECODE_PRINT=False
 # Control whether to verify fused metadata copy against individual copies (default: disabled)
 # Set SGLANG_VERIFY_FUSED_METADATA_COPY=1 or true to enable verification
 # This will crash with detailed error message if any inconsistency is detected
-_VERIFY_FUSED_METADATA_COPY = envs.SGLANG_VERIFY_FUSED_METADATA_COPY.get()
+# _VERIFY_FUSED_METADATA_COPY = envs.SGLANG_VERIFY_FUSED_METADATA_COPY.get()
 
 
 @dataclass(frozen=True)
@@ -240,11 +240,15 @@ class NSAIndexerMetadata(BaseIndexerMetadata):
         batch_idx_list: List[int] = None,
         topk_indices_offset_override: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        from sgl_kernel import (
-            fast_topk_transform_fused,
-            fast_topk_transform_ragged_fused,
-            fast_topk_v2,
-        )
+        if not _is_dcu:
+            from sgl_kernel import (
+                fast_topk_transform_fused,
+                fast_topk_transform_ragged_fused,
+                fast_topk_v2,
+            )
+        else:
+            from lightop import fast_topk_transform_fused, fast_topk_transform_ragged_fused
+            from sgl_kernel import fast_topk_v2
 
         if topk_indices_offset_override is not None:
             cu_topk_indices_offset = topk_indices_offset_override

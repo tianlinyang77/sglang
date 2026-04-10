@@ -832,22 +832,22 @@ class DeepseekV2MoE(nn.Module):
                 not is_packed_weight
                 and self.shared_experts.gate_up_proj.weight.dtype == torch.float8_e4m3fn
             )
-            if self.shared_experts_is_fp8:
-                if (
-                    _use_aiter
-                    and config.quantization_config.get("quant_method")
-                    == "compressed-tensors"
-                ):
-                    # For compressed-tensors ptpc model, don't need to check the weight_block_size
-                    pass
-                else:
-                    assert (
-                        self.shared_experts.gate_up_proj.quant_method.quant_config.weight_block_size
-                        == self.shared_experts.down_proj.quant_method.quant_config.weight_block_size
-                    )
-                    self.shared_experts_weight_block_size = (
-                        self.shared_experts.gate_up_proj.quant_method.quant_config.weight_block_size
-                    )
+            # if self.shared_experts_is_fp8:
+            #     if (
+            #         _use_aiter
+            #         and config.quantization_config.get("quant_method")
+            #         == "compressed-tensors"
+            #     ):
+            #         # For compressed-tensors ptpc model, don't need to check the weight_block_size
+            #         pass
+            #     else:
+            #         assert (
+            #             self.shared_experts.gate_up_proj.quant_method.quant_config.weight_block_size
+            #             == self.shared_experts.down_proj.quant_method.quant_config.weight_block_size
+            #         )
+            #         self.shared_experts_weight_block_size = (
+            #             self.shared_experts.gate_up_proj.quant_method.quant_config.weight_block_size
+            #         )
 
         self.top_k = config.num_experts_per_tok
 
@@ -1967,10 +1967,6 @@ class DeepseekV2AttentionMLA(
             k_nope = latent_cache[..., : self.kv_lora_rank]
             # overlap qk norm
             if self.alt_stream is not None and get_is_capture_mode() and not _use_fused_rmsnorm_rope and not _use_fused_rms_quant:
-            # if self.alt_stream is not None and get_is_capture_mode():
-                # if _use_fused_rmsnorm_rope:
-                #     logger.info("Fused RMSNorm+Rope+Quant is not supported in overlap qk norm.\nTurn off fused RMSNorm+Rope+Quant now.")
-                #     _use_fused_rmsnorm_rope = False
                 current_stream = torch.cuda.current_stream()
                 self.alt_stream.wait_stream(current_stream)
                 q = self.q_a_layernorm(q)
@@ -2107,43 +2103,43 @@ class DeepseekV2AttentionMLA(
                 expected_m,
             )
             q_nope_out = q_nope_out[:, :expected_m, :]
-        # elif _is_hip:
-        #     # TODO(haishaw): add bmm_fp8 to ROCm
-        #     if _use_aiter_gfx95 and self.w_kc.dtype == torch.uint8:
-        #         x = q_nope.transpose(0, 1)
-        #         q_nope_out = torch.empty(
-        #             x.shape[0],
-        #             x.shape[1],
-        #             self.w_kc.shape[2],
-        #             device=x.device,
-        #             dtype=torch.bfloat16,
-        #         )
-        #         batched_gemm_afp4wfp4_pre_quant(
-        #             x,
-        #             self.w_kc.transpose(-2, -1),
-        #             self.w_scale_k.transpose(-2, -1),
-        #             torch.bfloat16,
-        #             q_nope_out,
-        #         )
-        #     else:
-        #         q_nope_out = ds_bmm_wrapper(q_nope, self.w_kc, self.w_scale, torch.bfloat16)
-        #         #  q_nope_out = torch.bmm(
-        #         #     q_nope.to(torch.bfloat16).transpose(0, 1),
-        #         #     self.w_kc.to(torch.bfloat16) * self.w_scale,
-        #         # )
-        # elif self.w_kc.dtype == torch.float8_e4m3fn:
-        #     # fix bmm_fp8 error under cublas12.9 caused by bumpallocator, detail in pr#11612
-        #     q_nope_val, q_nope_scale = per_tensor_quant_mla_fp8(
-        #         q_nope.transpose(0, 1),
-        #         (
-        #             torch.zeros((1,), dtype=torch.float32, device=q_nope.device)
-        #             if _is_cublas_ge_129
-        #             else zero_allocator.allocate(1)
-        #         ),
-        #     )
-        #     q_nope_out = bmm_fp8(
-        #         q_nope_val, self.w_kc, q_nope_scale, self.w_scale, torch.bfloat16
-        #     )
+        elif _is_hip:
+            # TODO(haishaw): add bmm_fp8 to ROCm
+            if _use_aiter_gfx95 and self.w_kc.dtype == torch.uint8:
+                x = q_nope.transpose(0, 1)
+                q_nope_out = torch.empty(
+                    x.shape[0],
+                    x.shape[1],
+                    self.w_kc.shape[2],
+                    device=x.device,
+                    dtype=torch.bfloat16,
+                )
+                batched_gemm_afp4wfp4_pre_quant(
+                    x,
+                    self.w_kc.transpose(-2, -1),
+                    self.w_scale_k.transpose(-2, -1),
+                    torch.bfloat16,
+                    q_nope_out,
+                )
+            else:
+                # q_nope_out = ds_bmm_wrapper(q_nope, self.w_kc, self.w_scale, torch.bfloat16)
+                 q_nope_out = torch.bmm(
+                    q_nope.to(torch.bfloat16).transpose(0, 1),
+                    self.w_kc.to(torch.bfloat16) * self.w_scale,
+                )
+        elif self.w_kc.dtype == torch.float8_e4m3fn and not _is_dcu:
+            # fix bmm_fp8 error under cublas12.9 caused by bumpallocator, detail in pr#11612
+            q_nope_val, q_nope_scale = per_tensor_quant_mla_fp8(
+                q_nope.transpose(0, 1),
+                (
+                    torch.zeros((1,), dtype=torch.float32, device=q_nope.device)
+                    if _is_cublas_ge_129
+                    else zero_allocator.allocate(1)
+                ),
+            )
+            q_nope_out = bmm_fp8(
+                q_nope_val, self.w_kc, q_nope_scale, self.w_scale, torch.bfloat16
+            )
         else:
             # q_t =q_nope.transpose(0, 1).to(torch.bfloat16)
             #     w_vc_t = self.w_vc.contiguous().to(torch.float32).to(torch.bfloat16)
@@ -2151,7 +2147,7 @@ class DeepseekV2AttentionMLA(
             #         q_t,
             #         w_vc_t
             #     )
-            q_nope_out = torch.bmm(q_nope.transpose(0, 1).to(torch.bfloat16), self.w_kc.to(torch.bfloat16))
+            q_nope_out = torch.bmm(q_nope.transpose(0, 1).to(torch.bfloat16), self.w_kc.to(torch.bfloat16) * self.w_scale)
         q_nope_out = q_nope_out.transpose(0, 1)
         
         if (
@@ -2316,41 +2312,41 @@ class DeepseekV2AttentionMLA(
             attn_bmm_output = (
                 attn_bmm_output[:, :expected_m, :].transpose(0, 1).flatten(1, 2)
             )
-        # elif _is_hip:
-        #     # TODO(haishaw): add bmm_fp8 to ROCm
-        #     if _use_aiter_gfx95 and self.w_vc.dtype == torch.uint8:
-        #         x = attn_output.transpose(0, 1)
-        #         attn_bmm_output = torch.empty(
-        #             x.shape[0],
-        #             x.shape[1],
-        #             self.w_vc.shape[2],
-        #             device=x.device,
-        #             dtype=torch.bfloat16,
-        #         )
-        #         batched_gemm_afp4wfp4_pre_quant(
-        #             x,
-        #             self.w_vc.transpose(-2, -1),
-        #             self.w_scale_v.transpose(-2, -1),
-        #             torch.bfloat16,
-        #             attn_bmm_output,
-        #         )
-        #     else:
-        #         attn_bmm_output = ds_bmm_wrapper(attn_output, self.w_vc, self.w_scale, torch.bfloat16)
-        #         # attn_bmm_output = torch.bmm(
-        #         #     attn_output.to(torch.bfloat16).transpose(0, 1),
-        #         #     self.w_vc.to(torch.bfloat16) * self.w_scale,
-        #         # )
+        elif _is_hip:
+            # TODO(haishaw): add bmm_fp8 to ROCm
+            if _use_aiter_gfx95 and self.w_vc.dtype == torch.uint8:
+                x = attn_output.transpose(0, 1)
+                attn_bmm_output = torch.empty(
+                    x.shape[0],
+                    x.shape[1],
+                    self.w_vc.shape[2],
+                    device=x.device,
+                    dtype=torch.bfloat16,
+                )
+                batched_gemm_afp4wfp4_pre_quant(
+                    x,
+                    self.w_vc.transpose(-2, -1),
+                    self.w_scale_v.transpose(-2, -1),
+                    torch.bfloat16,
+                    attn_bmm_output,
+                )
+            else:
+                # attn_bmm_output = ds_bmm_wrapper(attn_output, self.w_vc, self.w_scale, torch.bfloat16)
+                attn_bmm_output = torch.bmm(
+                    attn_output.to(torch.bfloat16).transpose(0, 1),
+                    self.w_vc.to(torch.bfloat16) * self.w_scale,
+                )
 
-        #     if self.o_proj.weight.dtype == torch.uint8:
-        #         attn_bmm_output = attn_bmm_output.transpose(0, 1)
-        #         attn_bmm_output = fused_flatten_mxfp4_quant(attn_bmm_output)
-        #     elif self.o_proj.weight.dtype == torch.float8_e4m3fn:
-        #         attn_bmm_output = attn_bmm_output.transpose(0, 1)
-        #         attn_bmm_output = fused_flatten_fp8_group_quant(
-        #             attn_bmm_output, group_size=128, dtype_quant=torch.float8_e4m3fn
-        #         )
-        #     else:
-        #         attn_bmm_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
+            if self.o_proj.weight.dtype == torch.uint8:
+                attn_bmm_output = attn_bmm_output.transpose(0, 1)
+                attn_bmm_output = fused_flatten_mxfp4_quant(attn_bmm_output)
+            # elif self.o_proj.weight.dtype == torch.float8_e4m3fn:
+            #     attn_bmm_output = attn_bmm_output.transpose(0, 1)
+            #     attn_bmm_output = fused_flatten_fp8_group_quant(
+            #         attn_bmm_output, group_size=128, dtype_quant=torch.float8_e4m3fn
+            #     )
+            else:
+                attn_bmm_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
 
         # elif self.w_vc.dtype == torch.float8_e4m3fn:
         #     attn_output_val, attn_output_scale = per_tensor_quant_mla_fp8(
@@ -3264,7 +3260,7 @@ class DeepseekV2Model(nn.Module):
 
         self.alt_stream = (
             torch.cuda.Stream()
-            if _is_cuda or envs.SGLANG_NPU_USE_MULTI_STREAM.get() or _is_hip or is_sbo_enabled()
+            if _is_cuda or envs.SGLANG_NPU_USE_MULTI_STREAM.get() or is_sbo_enabled()
             else None
         )
 

@@ -949,17 +949,11 @@ class MooncakeKVManager(CommonKVManager):
                                 )
 
                             # Only the last chunk we need to send the aux data
-                            # Only the last PP rank populates the source AUX slot.
-                            # Earlier PP ranks still need to report Success for KV,
-                            # but must not overwrite decode AUX with the sentinel buffer.
-                            if self.pp_rank == self.pp_size - 1:
-                                ret = self.send_aux(
-                                    req,
-                                    kv_chunk.prefill_aux_index,
-                                    target_rank_registration_info.dst_aux_ptrs,
-                                )
-                            else:
-                                ret = 0
+                            ret = self.send_aux(
+                                req,
+                                kv_chunk.prefill_aux_index,
+                                target_rank_registration_info.dst_aux_ptrs,
+                            )
                             polls.append(True if ret == 0 else False)
                             dst_ranks_infos.append(
                                 (req.endpoint, req.dst_port, req.room)
