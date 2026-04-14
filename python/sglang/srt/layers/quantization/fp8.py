@@ -489,6 +489,11 @@ class Fp8LinearMethod(LinearMethodBase):
                 layer.weight_scale_inv.format_ue8m0 = True
             weight, weight_scale = layer.weight.data, layer.weight_scale_inv.data
 
+        from sglang.srt.layers.quantization.fp8_utils import hipblaslt_w8a8_block_fp8_linear
+
+        if self.w8a8_block_fp8_linear is hipblaslt_w8a8_block_fp8_linear:
+            weight = weight.T.contiguous()
+            weight_scale = weight_scale.T.contiguous()
         layer.weight.data = weight.data
         layer.weight_scale_inv.data = weight_scale.data
 

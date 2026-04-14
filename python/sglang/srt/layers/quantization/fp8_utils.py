@@ -820,7 +820,7 @@ def hipblaslt_w8a8_block_fp8_linear(
         bias: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
         input_2d = input.view(-1, input.shape[-1])
-        output_shape = [*input.shape[:-1], weight.shape[0]]
+        output_shape = [*input.shape[:-1], weight.shape[1]]
         q_input, input_scale = per_token_group_quant_fp8_dcu(
             input_2d, block_size[1], column_major_scales=False
         )
@@ -828,23 +828,12 @@ def hipblaslt_w8a8_block_fp8_linear(
 
         # if hasattr(self, "block_size") and self.block_size[0] == 64:
         #     enum_block_size = BlockSize.block_64x64
-        m, k = q_input.shape
-        if weight.shape[0] == k:
-            B = weight.contiguous()
-            Bs = weight_scale.contiguous()
-        elif weight.shape[1] == k:
-            B = weight.T.contiguous()
-            Bs = weight_scale.T.contiguous()
-        else:
-            raise RuntimeError(
-                f"Incompatible shapes: q_input={q_input.shape}, weight={weight.shape}"
-            )
         
         output = hipblaslt_w8a8_block_fp8_matmul(
             A=q_input,
-            B=B,
+            B=weight,
             As=input_scale,
-            Bs=Bs,
+            Bs=weight_scale,
             block_size=enum_block_size,
             output_dtype=input_2d.dtype,
         )
