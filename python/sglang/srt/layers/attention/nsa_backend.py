@@ -1705,22 +1705,22 @@ class NativeSparseAttnBackend(
         required_padding = 128 if self.device_sm_major >= 10 else 64
         need_padding = num_heads % required_padding != 0
 
-        if need_padding:
-            assert required_padding % num_heads == 0, (
-                f"num_heads {num_heads} cannot be padded to {required_padding}. "
-                f"TP size may be too large for this model."
-            )
+        # if need_padding:
+        #     assert required_padding % num_heads == 0, (
+        #         f"num_heads {num_heads} cannot be padded to {required_padding}. "
+        #         f"TP size may be too large for this model."
+        #     )
 
-            # Pad q to required size
-            q_padded = q_all.new_zeros((num_tokens, required_padding, head_dim))
-            q_padded[:, :num_heads, :] = q_all
-            q_input = q_padded
-        else:
-            q_input = q_all
-
+        #     # Pad q to required size
+        #     q_padded = q_all.new_zeros((num_tokens, required_padding, head_dim))
+        #     q_padded[:, :num_heads, :] = q_all
+        #     q_input = q_padded
+        # else:
+        #     q_input = q_all
+        q_input = q_all
         # indices shape must be (s_q, h_kv=1, topk), keep h_kv=1 unchanged
         indices_input = page_table_1.unsqueeze(1)
-        #logger.info(f"flash_mla_sparse_fwd q:{q_input},kv:{kv_cache}")
+
         o, _, _ = flash_mla_sparse_fwd(
             q=q_input,
             kv=kv_cache,
@@ -1728,10 +1728,10 @@ class NativeSparseAttnBackend(
             sm_scale=sm_scale,
             d_v=v_head_dim,
         )
-        #logger.info(f"flash_mla_sparse_fwd o:{o}")
+
         # Trim output back to original num_heads if we padded
-        if need_padding:
-            o = o[:, :num_heads, :]
+        # if need_padding:
+        #     o = o[:, :num_heads, :]
 
         return o
 

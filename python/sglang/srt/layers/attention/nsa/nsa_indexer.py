@@ -16,7 +16,7 @@ from sglang.srt.layers.dp_attention import attn_tp_all_gather_into_tensor
 from sglang.srt.layers.layernorm import LayerNorm
 from sglang.srt.layers.quantization.fp8_kernel import is_fp8_fnuz
 from sglang.srt.layers.utils import MultiPlatformOp
-from sglang.srt.utils import add_prefix, ceil_align, is_cuda, is_hip, is_npu,is_dcu
+from sglang.srt.utils import add_prefix, ceil_align, is_cuda, is_hip, is_npu, is_dcu
 
 import lightop
 from lightop import gemmopt
@@ -218,7 +218,6 @@ def hadamard_transform_optimized(x, scale=1.0):
     x_shape = x.shape
     dim = x.shape[-1]
 
-    # 获取缓存的 Hadamard 矩阵
     h_matrix = get_hadamard_matrix(dim, x.device, x.dtype)
 
     x = x.reshape(-1, dim)
@@ -229,10 +228,11 @@ def hadamard_transform_optimized(x, scale=1.0):
         x = F.pad(x, (0, dim_padded - dim))
 
     out = F.linear(x, h_matrix)
-    out = out * scale
+    if scale != 1.0:
+        out = out * scale
     return out[..., :dim].reshape(*x_shape)
 
-def rotate_activation(x: torch.Tensor) -> torch.Tensor:
+def rotate_activation(x: torch.Tensor, apply_scale: bool = True) -> torch.Tensor:
     assert x.dtype == torch.bfloat16
     # from sgl_kernel import hadamard_transform
     # if _is_hip:
@@ -243,7 +243,9 @@ def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     assert (
         hidden_size & (hidden_size - 1)
     ) == 0, "Hidden size must be a power of 2 for Hadamard transform."
-    return  hadamard_transform_optimized(x, scale=hidden_size**-0.5) 
+    
+    scale = hidden_size**-0.5 if apply_scale else 1.0
+    return  hadamard_transform_optimized(x, scale=scale) 
 
 
 class Indexer(MultiPlatformOp):
@@ -383,67 +385,93 @@ class Indexer(MultiPlatformOp):
         positions: torch.Tensor,
         enable_dual_stream: bool,
         forward_batch: ForwardBatch,
+        apply_hadamard_scale: bool = True, 
     ):
-        if enable_dual_stream:
-            current_stream = torch.cuda.current_stream()
-            self.alt_stream.wait_stream(current_stream)
+        if _is_dcu:
+            query, _ = self.wq_b(q_lora)
+            query = rearrange(query, "l (h d) -> l h d", d=self.head_dim)
+         
+            key, _ = self.wk(x)
+            
+            if key.ndim == 2:
+                key = key.view(key.shape[0], -1, self.head_dim)
 
-            with deep_gemm_wrapper.configure_deep_gemm_num_sms(
-                self.half_device_sm_count
-            ):
+            op.fuse_layernorm_rotary_embedding(
+                positions,
+                query,
+                key,
+                self.head_dim,
+                self.rotary_emb.cos_sin_cache,     
+                False,                              
+                None,                               
+                None,                              
+                self.k_norm.weight,                
+                getattr(self.k_norm, 'bias', None),  
+                None,                                
+                None,                               
+                1e-6,
+            )
+        else:
+            if enable_dual_stream:
+                current_stream = torch.cuda.current_stream()
+                self.alt_stream.wait_stream(current_stream)
+
+                with deep_gemm_wrapper.configure_deep_gemm_num_sms(
+                    self.half_device_sm_count
+                ):
+                    query, _ = self.wq_b(q_lora)
+                    query = rearrange(query, "l (h d) -> l h d", d=self.head_dim)
+                    q_rope, _ = torch.split(
+                        query,
+                        [self.rope_head_dim, self.head_dim - self.rope_head_dim],
+                        dim=-1,
+                    )
+                with torch.cuda.stream(self.alt_stream):
+                    key, _ = self.wk(x)
+                    key = self.k_norm(key)
+
+                    k_rope, _ = torch.split(
+                        key,
+                        [self.rope_head_dim, self.head_dim - self.rope_head_dim],
+                        dim=-1,
+                    )
+
+                current_stream.wait_stream(self.alt_stream)
+            else:
                 query, _ = self.wq_b(q_lora)
                 query = rearrange(query, "l (h d) -> l h d", d=self.head_dim)
                 q_rope, _ = torch.split(
-                    query,
-                    [self.rope_head_dim, self.head_dim - self.rope_head_dim],
-                    dim=-1,
+                    query, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1
                 )
-            with torch.cuda.stream(self.alt_stream):
-                # TODO we should also put DeepGEMM half SM here?
                 key, _ = self.wk(x)
                 key = self.k_norm(key)
-
                 k_rope, _ = torch.split(
-                    key,
-                    [self.rope_head_dim, self.head_dim - self.rope_head_dim],
-                    dim=-1,
+                    key, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1
                 )
 
-            current_stream.wait_stream(self.alt_stream)
-        else:
-            query, _ = self.wq_b(q_lora)
-            query = rearrange(query, "l (h d) -> l h d", d=self.head_dim)
-            q_rope, _ = torch.split(
-                query, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1
-            )
-            key, _ = self.wk(x)
-            key = self.k_norm(key)
-            k_rope, _ = torch.split(
-                key, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1
-            )
+            q_rope, k_rope = self.rotary_emb(positions, q_rope, k_rope)
 
-        q_rope, k_rope = self.rotary_emb(positions, q_rope, k_rope)
-
-        query[..., : self.rope_head_dim] = q_rope.clone()
-        key[..., : self.rope_head_dim] = k_rope.clone()
+            query[..., : self.rope_head_dim] = q_rope.clone()
+            key[..., : self.rope_head_dim] = k_rope.clone()
 
         if enable_dual_stream:
             current_stream = torch.cuda.current_stream()
             self.alt_stream.wait_stream(current_stream)
-            query = rotate_activation(query)
+
+            query = rotate_activation(query, apply_scale=apply_hadamard_scale)
 
             with torch.cuda.stream(self.alt_stream):
-                key = rotate_activation(key)
+                key = rotate_activation(key, apply_scale=apply_hadamard_scale)
             current_stream.wait_stream(self.alt_stream)
         elif (
             self.alt_stream is not None
             and forward_batch.nsa_cp_metadata is not None
             and self.nsa_enable_prefill_cp
         ):
-            key = rotate_activation(key)
+            key = rotate_activation(key, apply_scale=apply_hadamard_scale)
             current_stream = torch.cuda.current_stream()
             self.alt_stream.wait_stream(current_stream)
-            query = rotate_activation(query)
+            query = rotate_activation(query, apply_scale=apply_hadamard_scale)
 
             with torch.cuda.stream(self.alt_stream):
                 key = cp_all_gather_rerange_output(
@@ -455,8 +483,8 @@ class Indexer(MultiPlatformOp):
             current_stream.wait_stream(self.alt_stream)
             return query, key
         else:
-            query = rotate_activation(query)
-            key = rotate_activation(key)
+            query = rotate_activation(query, apply_scale=apply_hadamard_scale)
+            key = rotate_activation(key, apply_scale=apply_hadamard_scale)
 
         # allgather+rerrange
         if forward_batch.nsa_cp_metadata is not None and self.nsa_enable_prefill_cp:
@@ -1155,7 +1183,21 @@ class Indexer(MultiPlatformOp):
                 forward_batch.token_to_kv_pool.page_size,
             )
             return
-
+        elif _is_dcu:
+            buf = forward_batch.token_to_kv_pool.get_index_k_with_scale_buffer(
+                layer_id=layer_id
+            )
+            is_e4m3 = not _is_fp8_fnuz 
+            op.fuse_act_quant_and_store_index_k_cache(
+                key,                                      # input
+                buf,                                      # buf
+                forward_batch.out_cache_loc,              # loc
+                forward_batch.token_to_kv_pool.page_size, # page_size
+                1e-5,                                     # eps
+                False,                                    # use_ue8m0
+                is_e4m3                                   # is_e4m3
+            )
+            return
         # Fallback: original path
         assert act_quant is not None
         k_fp8, k_scale = act_quant(key, self.block_size, self.scale_fmt)
@@ -1223,33 +1265,43 @@ class Indexer(MultiPlatformOp):
                 enable_dual_stream,
                 metadata,
                 return_indices,
-            )
+            )          
         if enable_dual_stream and forward_batch.forward_mode.is_decode_or_idle():
             current_stream = torch.cuda.current_stream()
             self.alt_stream.wait_stream(current_stream)
             weights = self._project_and_scale_head_gates(x)
-            query, key = self._get_q_k_bf16(
-                q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
-            )
-            q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
-            with torch.cuda.stream(self.alt_stream):
-                self._store_index_k_cache(
-                    forward_batch=forward_batch,
-                    layer_id=layer_id,
-                    key=key,
-                    act_quant=act_quant,
+            if _is_dcu:
+                query, key = self._get_q_k_bf16(
+                    q_lora, x, positions, False, forward_batch=forward_batch,
+                    apply_hadamard_scale=False 
                 )
-            current_stream.wait_stream(self.alt_stream)
-            weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
-        else:
-            query, key = self._get_q_k_bf16(
-                q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
-            )
-
-            if enable_dual_stream:
-                current_stream = torch.cuda.current_stream()
-                self.alt_stream.wait_stream(current_stream)
-
+                k_buf = forward_batch.token_to_kv_pool.get_index_k_with_scale_buffer(layer_id=layer_id)
+                k_loc = forward_batch.out_cache_loc
+                page_size = forward_batch.token_to_kv_pool.page_size
+                is_e4m3 = not _is_fp8_fnuz
+                
+                hadamard_scale = self.hidden_size ** -0.5
+                fused_q_scale = hadamard_scale * self.softmax_scale
+                fused_k_scale = hadamard_scale
+                
+                q_fp8, q_scale, weights = op.fuse_qk_quant_and_store_index_k_cache(
+                        query, 
+                        key, 
+                        k_buf, 
+                        k_loc, 
+                        page_size,
+                        weights,           # weights_in_opt
+                        fused_q_scale,     # q_scale_factor
+                        fused_k_scale,     # k_scale_factor
+                        1e-5,              # eps
+                        False,             # use_ue8m0
+                        is_e4m3            # is_e4m3
+                    )
+                q_fp8 = q_fp8.view(torch.float8_e4m3fnuz) if _is_fp8_fnuz else q_fp8.view(torch.float8_e4m3fn)
+            else:
+                query, key = self._get_q_k_bf16(
+                    q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
+                )
                 q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
                 with torch.cuda.stream(self.alt_stream):
                     self._store_index_k_cache(
@@ -1259,14 +1311,60 @@ class Indexer(MultiPlatformOp):
                         act_quant=act_quant,
                     )
                 current_stream.wait_stream(self.alt_stream)
-            else:
-                q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
-                self._store_index_k_cache(
-                    forward_batch=forward_batch,
-                    layer_id=layer_id,
-                    key=key,
-                    act_quant=act_quant,
+                weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
+        else:
+            if _is_dcu:
+                query, key = self._get_q_k_bf16(
+                    q_lora, x, positions, enable_dual_stream if not _is_dcu else False, forward_batch=forward_batch,
+                    apply_hadamard_scale=False  
                 )
+                k_buf = forward_batch.token_to_kv_pool.get_index_k_with_scale_buffer(layer_id=layer_id)
+                k_loc = forward_batch.out_cache_loc
+                page_size = forward_batch.token_to_kv_pool.page_size
+                is_e4m3 = not _is_fp8_fnuz
+        
+                hadamard_scale = self.hidden_size ** -0.5
+                fused_q_scale = hadamard_scale * self.softmax_scale
+                fused_k_scale = hadamard_scale
+                
+                q_fp8, q_scale, _ = op.fuse_qk_quant_and_store_index_k_cache(
+                    query, 
+                    key, 
+                    k_buf, 
+                    k_loc, 
+                    page_size,
+                    None,              # weights_in_opt=None
+                    fused_q_scale,     # q_scale_factor
+                    fused_k_scale,     # k_scale_factor
+                    1e-5,              # eps
+                    False,             # use_ue8m0
+                    is_e4m3            # is_e4m3
+                )
+                q_fp8 = q_fp8.view(torch.float8_e4m3fnuz) if _is_fp8_fnuz else q_fp8.view(torch.float8_e4m3fn)
+            else:
+                query, key = self._get_q_k_bf16(
+                    q_lora, x, positions, enable_dual_stream if not _is_dcu else False, forward_batch=forward_batch
+                )
+                if enable_dual_stream:
+                    current_stream = torch.cuda.current_stream()
+                    self.alt_stream.wait_stream(current_stream)
+                    q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
+                    with torch.cuda.stream(self.alt_stream):
+                        self._store_index_k_cache(
+                            forward_batch=forward_batch,
+                            layer_id=layer_id,
+                            key=key,
+                            act_quant=act_quant,
+                        )
+                    current_stream.wait_stream(self.alt_stream)
+                else:
+                    q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
+                    self._store_index_k_cache(
+                        forward_batch=forward_batch,
+                        layer_id=layer_id,
+                        key=key,
+                        act_quant=act_quant,
+                    )
 
             # `_get_logits_head_gate` expects a Tensor. For tuple activations, dequantize
             # to a float tensor here (callsite), keeping `_get_logits_head_gate` backend-agnostic.

@@ -152,6 +152,29 @@ def w8a8_nt_kpack2_marlin_weight(w8a8_w, # [size_n, size_k// 2 ]
     q = q.reshape((size_n // k_tile, size_k * k_tile))
     return q
 
+def weight8bit_nt_kpack2_marlin1(weight, # [size_n, size_k// 2 ]
+                                k_tile=16,
+                                k_tile1=4,
+                                n_tile=16, 
+                                n_tile1=16):
+    assert weight.element_size() == 1, "weight 必须是 8 bit 类型"
+    if weight.dim() == 2:
+        size_n, size_k = weight.shape
+        assert size_n % k_tile == 0 and size_k % n_tile == 0, "k_tile / n_tile 必须能整除对应维度"
+
+        q = weight.reshape((size_n // (n_tile*n_tile1), n_tile1, n_tile, size_k // (k_tile*k_tile1), k_tile1, k_tile))
+        # q = q.permute((0, 2, 1, 3)).contiguous()
+        q = q.permute((0, 3, 1, 4, 2, 5)).contiguous()
+        # q = q.reshape((size_n // k_tile, size_k * k_tile))
+    elif weight.dim() == 3:
+        E, size_n, size_k = weight.shape
+        assert size_n % n_tile == 0 and size_k % k_tile == 0, "k_tile / n_tile 必须能整除对应维度"
+
+        q = weight.reshape((E, size_n // (n_tile*n_tile1), n_tile1, n_tile, size_k // (k_tile*k_tile1), k_tile1, k_tile))
+        q = q.permute((0, 1, 4, 2, 5, 3, 6)).contiguous()
+        # q = q.reshape((E, size_n // k_tile, size_k * k_tile))
+    return q
+
 class CompressedTensorsMarlinMoEMethod(FusedMoEMethodBase):
     @staticmethod
     def get_moe_method(
@@ -254,7 +277,7 @@ class CompressedTensorsW8A8Int8MarlinMoEMethod(CompressedTensorsMarlinMoEMethod)
             if not self.use_deepep:
                 w1_marlin_in = get_w8a8_int8_marlin_weights(layer.w13_weight[ii])
             else:
-                w1_marlin_in = w8a8_nt_kpack2_marlin_weight(layer.w13_weight[ii])
+                w1_marlin_in = weight8bit_nt_kpack2_marlin1(layer.w13_weight[ii])
             w1_marlin_list.append(w1_marlin_in)
         w1_marlin = torch.stack(w1_marlin_list, dim=0)
 
@@ -263,7 +286,7 @@ class CompressedTensorsW8A8Int8MarlinMoEMethod(CompressedTensorsMarlinMoEMethod)
             if not self.use_deepep:
                 w2_marlin_in = get_w8a8_int8_marlin_weights(layer.w2_weight[ii])
             else:
-                w2_marlin_in = w8a8_nt_kpack2_marlin_weight(layer.w2_weight[ii])
+                w2_marlin_in = weight8bit_nt_kpack2_marlin1(layer.w2_weight[ii])
             w2_marlin_list.append(w2_marlin_in)
         w2_marlin = torch.stack(w2_marlin_list, dim=0)
 
