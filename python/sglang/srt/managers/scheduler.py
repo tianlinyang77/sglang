@@ -952,15 +952,6 @@ class Scheduler(
         self.transfer_backend = TransferBackend(
             self.server_args.disaggregation_transfer_backend
         )
-        #nhb
-        if self.draft_worker is None or self.spec_algorithm.is_ngram():
-            draft_token_to_kv_pool = None
-        elif self.spec_algorithm.is_eagle() and self.enable_overlap:
-            draft_token_to_kv_pool = (
-                self.draft_worker.draft_worker.draft_runner.token_to_kv_pool
-            )
-        else:
-            draft_token_to_kv_pool = self.draft_worker.model_runner.token_to_kv_pool
 
         if self.draft_worker is None or self.spec_algorithm.is_ngram():
             draft_token_to_kv_pool = None
