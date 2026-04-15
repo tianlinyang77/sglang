@@ -89,6 +89,15 @@ from sglang.srt.utils import (
     set_weight_attrs,
     use_intel_amx_backend,
 )
+if is_hip():
+    try:
+        from aiter.fused_moe_asm_wna16 import fused_experts_asm_impl
+        import os
+        SGLANG_USE_AITER_FP8_ASM_MOE = os.getenv("SGLANG_USE_AITER_FP8_ASM_MOE", "0") == "1"
+    except ImportError:
+        SGLANG_USE_AITER_FP8_ASM_MOE = False
+else:
+    SGLANG_USE_AITER_FP8_ASM_MOE = False
 
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.token_dispatcher import CombineInput, DispatchOutput
@@ -1720,6 +1729,31 @@ class Fp8MoEMethod(FusedMoEMethodBase):
         no_combine: bool = False,
     ) -> Optional[torch.Tensor]:
         topk_weights, topk_ids, _ = topk_output
+        if self.block_quant and SGLANG_USE_AITER_FP8_ASM_MOE:
+            return fused_experts_asm_impl(x,
+                            layer.w13_weight,
+                            layer.w2_weight,
+                            topk_weights,
+                            topk_ids,
+                            x.dtype,
+                            False,
+                            activation,
+                            True,
+                            False,
+                            False,
+                            False,
+                            False,
+                            False,
+                            -1,
+                            None,
+                            layer.w13_weight_scale_inv,
+                            layer.w2_weight_scale_inv,
+                            None,
+                            None,
+                            layer.w13_input_scale,
+                            layer.w2_input_scale,
+                            (128,128),
+                )
         if _use_hip_int4:
             # TODO: add triton kernel and add check _use_aiter
             assert not no_combine, f"{no_combine=} is not supported."
