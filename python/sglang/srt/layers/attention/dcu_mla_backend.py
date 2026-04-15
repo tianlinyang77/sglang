@@ -21,19 +21,19 @@ import logging
 logger = logging.getLogger(__name__)
 from sglang.srt.utils import is_dcu
 _is_dcu = is_dcu()
-is_nmz_fp8 = False
+is_fp8 = False
 try:
     
     if _is_dcu:
         try:
             from flash_mla import (
                 flash_mla_with_kvcache,
-                # flash_mla_with_kvcache_quantization,
+                flash_mla_with_kvcache_quantization,
                 # get_mla_metadata,
                 get_mla_decoding_metadata_dense_fp8 as get_mla_metadata,
                 flash_mla_with_kvcache_fp8, # only support fp8_e4m3
             )
-            is_nmz_fp8 = True
+            is_fp8 = True
         except Exception:
             from flash_mla import (
                 flash_mla_with_kvcache,
@@ -69,6 +69,19 @@ except Exception:  # TODO: need remove
         )
 
 PAGE_SIZE = 64 # 强制64
+
+def is_bmz_fp8(kv_cache: torch.Tensor) -> bool:
+    if not (kv_cache.is_cuda and kv_cache.dtype == torch.float8_e5m2):
+        return False
+    try:
+        props = torch.cuda.get_device_properties(kv_cache.device.index)
+        gcn_arch = getattr(props, "gcnArchName", "")
+        if "gfx936" in gcn_arch:
+            return True   
+    except Exception:
+        pass
+    return False
+
 
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
@@ -644,7 +657,7 @@ class DCUMLABackend(AttentionBackend):
             )
         else:
             reshape_q = q.view(bs, -1, layer.tp_q_head_num, layer.head_dim)
-            if is_nmz_fp8:
+            if is_fp8 and not is_bmz_fp8(k_cache):
                 reshape_q = reshape_q.to(k_cache_reshaped.dtype)
                 o, _ = flash_mla_with_kvcache_fp8(
                     q=reshape_q,
