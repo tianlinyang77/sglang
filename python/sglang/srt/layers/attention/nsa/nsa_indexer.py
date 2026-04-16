@@ -815,21 +815,18 @@ class Indexer(MultiPlatformOp):
                 else:
                     kv, scale = kv_fp8
                     logits_chunk = lightop.mqa_logits(
-                        q_fp8[:q_offset],
+                        q_fp8[start:end],
                         kv,
-                        weights[:q_offset],
-                        ks,
-                        ke,
+                        weights[start:end],
+                        ks[start:end],
+                        ke[start:end],
                         scale
                     )
-                    # logits_chunk = deep_gemm.fp8_mqa_logits(
-                    #     q_fp8[start:end],
-                    #     kv_fp8,
-                    #     weights[start:end],
-                    #     ks[start:end],
-                    #     ke[start:end],
-                    #     clean_logits=False,
-                    # )
+
+
+            assert logits_chunk.shape[0] == (end - start), (
+                f"logits_chunk rows mismatch: {logits_chunk.shape[0]} != {end - start}"
+            )
 
             lengths_chunk = seq_lens_expanded[start:end]
 

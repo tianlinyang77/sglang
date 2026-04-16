@@ -47,6 +47,7 @@ from sglang.srt.model_loader.utils import (
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.deepseek_common.utils import (
     _is_cuda,
+    _is_dcu,
     _is_fp8_fnuz,
     _is_hip,
     _is_npu,
@@ -565,6 +566,26 @@ class DeepseekV2WeightLoaderMixin:
                 )
 
             if not use_deep_gemm_bmm:
+                if (
+                    _is_dcu
+                    and w.dtype in (torch.float8_e4m3fn, torch.float8_e4m3fnuz)
+                    and not (
+                        _use_aiter_gfx95
+                        and self.quant_config is not None
+                        and self.quant_config.get_name() == "quark"
+                    )
+                ):
+                    # ROCm fallback paths repeatedly cast FP8 MLA BMM weights to BF16
+                    # during forward. Materialize them once at load time instead.
+                    w_scale = self_attn.w_scale
+                    if not torch.is_tensor(w_scale):
+                        w_scale = torch.tensor(
+                            w_scale, dtype=torch.float32, device=w_kc.device
+                        )
+                    w_kc = (w_kc.to(torch.bfloat16) * w_scale).contiguous()
+                    w_vc = (w_vc.to(torch.bfloat16) * w_scale).contiguous()
+                    self_attn.w_scale = 1.0
+
                 self_attn.w_kc = bind_or_assign(
                     self_attn.w_kc, w_kc.transpose(1, 2).contiguous().transpose(1, 2)
                 )

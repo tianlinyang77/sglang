@@ -1756,7 +1756,8 @@ class NativeSparseAttnBackend(
         assert self.real_page_size == 64, "only page size 64 is supported"
 
         if not self.nsa_kv_cache_store_fp8:
-            # inefficiently quantize the whole cache
+            # Current flash_mla sparse-kvcache path requires FP8 cache when
+            # indices are provided, so BF16 KV must still be quantized here.
             kv_cache = quantize_k_cache(kv_cache)
 
         indices = page_table_1.unsqueeze(1)

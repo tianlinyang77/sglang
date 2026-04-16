@@ -31,6 +31,7 @@ from sglang.srt.utils import (
     is_hip,
     is_npu,
     is_nvidia_cublas_version_ge_12_9,
+    is_dcu,
 )
 
 _is_hip = is_hip()
@@ -43,6 +44,7 @@ _is_cpu = is_cpu()
 _device_sm = get_device_sm()
 _is_gfx95_supported = is_gfx95_supported()
 _use_aiter_gfx95 = _use_aiter and _is_gfx95_supported
+_is_dcu = is_dcu()
 
 
 _is_cublas_ge_129 = is_nvidia_cublas_version_ge_12_9()
