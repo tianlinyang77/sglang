@@ -476,11 +476,8 @@ def fused_experts_impl_w4a16(
             f"[get_config_w4a16] M={M}, K={K}, N1={N1}, N2={N2}, E={E}, top_k={topk_ids.shape[1]}, block_size={block_shape[1]}, dtype={hidden_states.dtype} "
             f"no solution found (expected on unsupported configs)"
         )
-    w1_zp = torch.zeros((E, N1, K//block_shape[1]//2), dtype=torch.uint8, device=topk_ids.get_device()) if w1_zp is None else w1_zp
-    w2_zp = torch.zeros((E, K, N2//block_shape[1]//2), dtype=torch.uint8, device=topk_ids.get_device()) if w2_zp is None else w2_zp
-    w1_zp[:] = 136
-    w2_zp[:] = 136
-    return aiter_moe(hidden_states, w1, w2, topk_weights, topk_ids, moe_cfg, w1_scale, w2_scale, w1_zp, w2_zp, a1_scale, a2_scale, block_shape, E, None, inplace, routed_scaling_factor, activation)
+
+    return aiter_moe(hidden_states, w1, w2, topk_weights, topk_ids, moe_cfg, inplace, activation, w1_scale, w2_scale, w1_zp, w2_zp, a1_scale, a2_scale, block_shape, E, None, routed_scaling_factor)
 
 def fused_experts_impl(
     hidden_states: torch.Tensor,
