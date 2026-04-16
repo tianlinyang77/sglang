@@ -92,6 +92,7 @@ from sglang.srt.utils import (
 if is_hip():
     try:
         from aiter.fused_moe_asm_wna16 import fused_experts_asm_impl
+        from aiter.ops.shuffle import asm_shuffle_weight_b8
         import os
         SGLANG_USE_AITER_FP8_ASM_MOE = os.getenv("SGLANG_USE_AITER_FP8_ASM_MOE", "0") == "1"
     except ImportError:
@@ -1018,14 +1019,20 @@ class Fp8MoEMethod(FusedMoEMethodBase):
             )
             layer.w2_input_scale = None
 
-        if _use_aiter:
+        if _use_aiter or SGLANG_USE_AITER_FP8_ASM_MOE:
             # Pre-shuffle weights
-            t = shuffle_weight(layer.w13_weight, (16, 16))
-            layer.w13_weight.copy_(t)
-            del t
-            t = shuffle_weight(layer.w2_weight, (16, 16))
-            layer.w2_weight.copy_(t)
-            del t
+            # t = shuffle_weight(layer.w13_weight, (16, 16))
+            # layer.w13_weight.copy_(t)
+            # del t
+            # t = shuffle_weight(layer.w2_weight, (16, 16))
+            # layer.w2_weight.copy_(t)
+            # del t
+            w13_weight = asm_shuffle_weight_b8(layer.w13_weight, 1)
+            layer.w13_weight.copy_(w13_weight)
+            del w13_weight
+            w2_weight = asm_shuffle_weight_b8(layer.w2_weight, 2)
+            layer.w2_weight.copy_(w2_weight)
+            del w2_weight
         elif _is_cpu:
             assert (
                 _is_cpu_amx_available
@@ -1753,6 +1760,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
                             layer.w13_input_scale,
                             layer.w2_input_scale,
                             (128,128),
+                            use_shuffle=True
                 )
         if _use_hip_int4:
             # TODO: add triton kernel and add check _use_aiter
