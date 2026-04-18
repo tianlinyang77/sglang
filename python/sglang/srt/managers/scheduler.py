@@ -751,7 +751,6 @@ class Scheduler(
 
                 self.tree_cache = SWAChunkCache(params)
         else:
-
             if envs.SGLANG_EXPERIMENTAL_CPP_RADIX_TREE.get():
                 # lazy import to avoid JIT overhead
                 from sglang.srt.mem_cache.radix_cache_cpp import RadixCacheCpp
@@ -763,16 +762,17 @@ class Scheduler(
                     from sglang.srt.mem_cache.hi_mamba_radix_cache import (
                         HiMambaRadixCache,
                     )
-
                     self.tree_cache = HiMambaRadixCache(
                         params=params, server_args=server_args
                     )
                 else:
                     from sglang.srt.mem_cache.hiradix_cache import HiRadixCache
-
                     self.tree_cache = HiRadixCache(
                         params=params, server_args=server_args
                     )
+                # self.tree_cache.cache_controller.set_producer_stream(
+                #     self.forward_stream
+                # )
                 self.tp_worker.register_hicache_layer_transfer_counter(
                     self.tree_cache.cache_controller.layer_done_counter
                 )
@@ -797,6 +797,7 @@ class Scheduler(
                     tp_group=self.tp_group,
                 )
             else:
+                logger.info(f"4444444444444444444444")
                 self.tree_cache = RadixCache(params)
 
         if server_args.enable_streaming_session:
@@ -2621,6 +2622,13 @@ class Scheduler(
 
                 with self.forward_stream_ctx, self.record_bubble_metrics(batch):
                     self.forward_stream.wait_stream(self.schedule_stream)
+                    # Wait for HiCache D2H transfer to finish before forward.
+                    # The SM copy kernel and FA3 persistent kernel compete for
+                    # SM resources when running concurrently.
+                    # if self.enable_hierarchical_cache:
+                    #     evt = self.tree_cache.cache_controller.last_write_finish_event
+                    #     if evt is not None:
+                    #         self.forward_stream.wait_event(evt)
                     self.future_map.resolve_future(model_worker_batch)
                     with self.record_forward_metrics(batch):
                         batch_result = self.model_worker.forward_batch_generation(

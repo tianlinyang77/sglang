@@ -2842,7 +2842,8 @@ class ServerArgs:
         self._resolve_storage_layout_compatibility()
 
         # Step 3: IO-decode backend compatibility (may change io backend).
-        io_changed = self._resolve_io_decode_attention_compatibility()
+        # io_changed = self._resolve_io_decode_attention_compatibility()    #暂时注掉对fa3后端的修改
+        io_changed = False
 
         # Step 4: Re-normalize layout after io backend changes.
         if io_changed:
@@ -2898,7 +2899,6 @@ class ServerArgs:
         )
         if effective_decode_backend != "fa3":
             return False
-
         if self.decode_attention_backend is not None:
             self.hicache_io_backend = "direct"
             logger.warning(
@@ -2908,6 +2908,7 @@ class ServerArgs:
             return True
 
         # If decode backend is implicit, pick a safe backend without changing io backend.
+        # logger.info(f"self.use_mla_backend():{self.use_mla_backend()},is_flashinfer_available():{is_flashinfer_available()}")
         if not self.use_mla_backend():
             self.decode_attention_backend = (
                 "flashinfer" if is_flashinfer_available() else "triton"
@@ -5072,6 +5073,7 @@ class ServerArgs:
                 "page_first_direct",
                 "page_first_kv_split",
                 "page_head",
+                "layout_dcu",
             ],
             default=ServerArgs.hicache_mem_layout,
             help="The layout of host memory pool for hierarchical cache.",

@@ -15,7 +15,7 @@ from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import is_npu
 from sglang.srt.utils.profile_merger import ProfileMerger
 from sglang.srt.utils.profile_utils import ProfileManager
-
+from sglang.srt.profile.prof import profile
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import ScheduleBatch
     from sglang.srt.managers.scheduler import Scheduler
@@ -32,7 +32,8 @@ if _is_npu:
     torch_npu._apply_patches(patches)
 
 logger = logging.getLogger(__name__)
-
+from sglang.srt.utils import get_bool_env_var
+sglang_enable_hipprof = get_bool_env_var("SGLANG_ENABLE_HIPPROF")
 
 class SchedulerProfilerMixin:
     def init_profiler(self: Scheduler):
@@ -138,6 +139,12 @@ class SchedulerProfilerMixin:
     def start_profile(
         self: Scheduler, stage: Optional[ForwardMode] = None
     ) -> ProfileReqOutput | None:
+
+        if sglang_enable_hipprof:
+            profile.StartTracer()
+            logger.info("hipprof start##########")
+            return 
+
         if envs.SGLANG_PROFILE_V2.get():
             return self._profile_manager.manual_start()
 
@@ -251,6 +258,13 @@ class SchedulerProfilerMixin:
     def stop_profile(
         self: Scheduler, stage: Optional[ForwardMode] = None
     ) -> ProfileReqOutput | None:
+
+        if sglang_enable_hipprof:
+            profile.StopTracer()
+            logger.info("hipprof stop#############")
+            return 
+
+
         if envs.SGLANG_PROFILE_V2.get():
             return self._profile_manager.manual_stop()
 

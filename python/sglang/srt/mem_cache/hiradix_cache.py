@@ -33,6 +33,7 @@ from sglang.srt.mem_cache.memory_pool import (
 )
 from sglang.srt.mem_cache.memory_pool_host import (
     MHATokenToKVPoolHost,
+    MHATokenToKVPoolHostDCU,
     MLATokenToKVPoolHost,
     NSATokenToKVPoolHost,
 )
@@ -45,14 +46,14 @@ from sglang.srt.mem_cache.radix_cache import (
 )
 from sglang.srt.mem_cache.utils import convert_to_bigram_key
 from sglang.srt.observability.metrics_collector import StorageMetricsCollector
-from sglang.srt.utils import bind_to_closest_numa_node_cuda
+from sglang.srt.utils import (bind_to_closest_numa_node_cuda,get_bool_env_var)
 
 if TYPE_CHECKING:
     from sglang.srt.mem_cache.cache_init_params import CacheInitParams
     from sglang.srt.server_args import ServerArgs
 
 logger = logging.getLogger(__name__)
-
+_kv_layout_dcu_fa = get_bool_env_var("SGLANG_KV_LAYOUT_DCU_FA", default="true")
 
 class HiRadixCache(RadixCache):
 
@@ -66,14 +67,26 @@ class HiRadixCache(RadixCache):
         self.kv_cache = params.token_to_kv_pool_allocator.get_kvcache()
 
         if isinstance(self.kv_cache, MHATokenToKVPool):
-            self.token_to_kv_pool_host = MHATokenToKVPoolHost(
-                self.kv_cache,
-                server_args.hicache_ratio,
-                server_args.hicache_size,
-                self.page_size,
-                server_args.hicache_mem_layout,
-                allocator_type=server_args.hicache_storage_backend,
-            )
+            logger.info(f"_kv_layout_dcu_fa:{_kv_layout_dcu_fa}")
+            if _kv_layout_dcu_fa:
+                logger.info(f"################")
+                self.token_to_kv_pool_host = MHATokenToKVPoolHostDCU(
+                    self.kv_cache,
+                    server_args.hicache_ratio,
+                    server_args.hicache_size,
+                    self.page_size,
+                    server_args.hicache_mem_layout,
+                    allocator_type=server_args.hicache_storage_backend,
+                )
+            else:
+                self.token_to_kv_pool_host = MHATokenToKVPoolHost(
+                    self.kv_cache,
+                    server_args.hicache_ratio,
+                    server_args.hicache_size,
+                    self.page_size,
+                    server_args.hicache_mem_layout,
+                    allocator_type=server_args.hicache_storage_backend,
+                )
         elif isinstance(self.kv_cache, NSATokenToKVPool):
             self.token_to_kv_pool_host = NSATokenToKVPoolHost(
                 self.kv_cache,
@@ -1087,6 +1100,7 @@ class HiRadixCache(RadixCache):
         """
         return self.cache_controller.start_loading()
 
+
     def flush_write_through_acks(self) -> None:
         self.writing_check()
 
@@ -1453,10 +1467,9 @@ class HiRadixCache(RadixCache):
         if priority is None:
             priority = 0
         key, value = self.maybe_bigram_convert(key, value)
-
         if len(key) == 0:
             return InsertResult(prefix_len=0)
-
+       
         if self.is_eagle and value is not None:
             # Make sure the value len equal to the EAGLE bigram key len
             value = value[: len(key)]
@@ -1464,7 +1477,6 @@ class HiRadixCache(RadixCache):
         node = self.root_node
         child_key = self.get_child_key_fn(key)
         total_prefix_length = 0
-
         while len(key) > 0 and child_key in node.children.keys():
             node = node.children[child_key]
             node.last_access_time = time.monotonic()

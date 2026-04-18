@@ -181,6 +181,20 @@ TORCH_LIBRARY_EXPAND(sgl_kernel, m) {
   m.impl("dcu_alloc_extend_kernel", torch::kCUDA, &dcu_alloc_extend_kernel);
   m.def("dcu_alloc_decode_kernel(Tensor seq_lens_ptr, Tensor last_loc_ptr, Tensor free_page_ptr, Tensor out_indices, int bs, int page_size) -> ()");
   m.impl("dcu_alloc_decode_kernel", torch::kCUDA, &dcu_alloc_decode_kernel);
+
+
+  m.def("transfer_kv_all_direct_pf_lf_H2D_dcu(Tensor src_ptrs_k, Tensor src_ptrs_v,Tensor[] dst_ptrs_k, Tensor[] dst_ptrs_v,"
+      "Tensor src_indices,Tensor dst_indices, int start_layer_id, int page_size) ->() ");
+  m.impl("transfer_kv_all_direct_pf_lf_H2D_dcu", torch::kCUDA, &transfer_kv_all_direct_pf_lf_H2D_dcu);
+  m.def("transfer_kv_all_direct_lf_pf_D2H_dcu(Tensor[] src_ptrs_k, Tensor[] src_ptrs_v,Tensor dst_ptrs_k, Tensor dst_ptrs_v,"
+      "Tensor src_indices,Tensor dst_indices, int start_layer_id, int page_size) ->() ");
+  m.impl("transfer_kv_all_direct_lf_pf_D2H_dcu", torch::kCUDA, &transfer_kv_all_direct_lf_pf_D2H_dcu);
+
+  m.def("transfer_kv_all_layer_to_pf_dcu(Tensor src_k_layers, Tensor dst_k, Tensor src_v_layers, Tensor dst_v, Tensor src_indices, Tensor dst_indices,"
+    "int item_size,int dst_layout_dim, int num_layers,int page_size, "
+    "int head_num ,int v_head_dim,int block_quota, int num_warps_per_block) -> ()");
+  m.impl("transfer_kv_all_layer_to_pf_dcu", torch::kCUDA, &transfer_kv_all_layer_to_pf_dcu);
+
   m.def(
       "transfer_kv_per_layer(Tensor src_k, Tensor dst_k, Tensor src_v, Tensor dst_v, Tensor src_indices, Tensor "
       "dst_indices, int item_size, int block_quota, int num_warps_per_block) -> ()");

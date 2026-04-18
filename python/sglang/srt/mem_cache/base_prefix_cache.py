@@ -239,9 +239,9 @@ class BasePrefixCache(ABC, PrefixCacheTrait):
         """
         raise NotImplementedError()
 
+
     def flush_write_through_acks(self) -> None:
         """Release lock_ref on radix-tree nodes whose write-through has completed.
-
         Lightweight operation that only processes finished write acks.
         No-op for caches without hierarchical write-through support.
         """
