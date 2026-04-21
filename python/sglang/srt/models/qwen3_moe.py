@@ -91,7 +91,7 @@ from sglang.srt.utils import (
 )
 from sglang.srt.utils.hf_transformers_utils import get_rope_config
 
-_use_fused_qwen_bailing_rotary = get_bool_env_var("SGLANG_USE_FUSED_BAILING_RMS_ROTARY")
+_use_fused_qwen_bailing_rotary = get_bool_env_var("SGLANG_USE_FUSED_RMS_ROTARY")
 
 _is_cuda = is_cuda()
 _is_dcu = is_dcu()
