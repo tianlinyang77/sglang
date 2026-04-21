@@ -337,6 +337,7 @@ class Envs:
     SGLANG_USE_FUSED_RMS_ROTARY = EnvBool(False)
     SGLANG_USE_FUSED_TOPK_SOFTMAX = EnvBool(False)
     SGLANG_USE_FUSED_RESHAPE_TO_FLOAT = EnvBool(False)
+    SGLANG_USE_PREFILL_AITER_LINEAR_ATTN = EnvBool(False)
 
 
     # Quantization
