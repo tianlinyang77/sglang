@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
+import os
 
 import torch
 import triton
@@ -66,9 +67,16 @@ class TritonAttnBackend(AttentionBackend):
         )
         from sglang.srt.layers.attention.triton_ops.extend_attention import (
             build_unified_kv_indices,
-            extend_attention_fwd,
             extend_attention_fwd_unified,
         )
+        self.use_aiter_triton_extend_fwd = os.getenv("SGLANG_USE_TRITON_EXTEND_FROM_AITER", "0") == "1"
+        if self.use_aiter_triton_extend_fwd:
+            try:
+                from aiter.ops.triton.extend_attention import extend_attention_fwd
+            except ImportError:
+                self.use_aiter_triton_extend_fwd = False
+        if not self.use_aiter_triton_extend_fwd:
+            from sglang.srt.layers.attention.triton_ops.extend_attention import extend_attention_fwd
 
         super().__init__()
 
@@ -949,6 +957,31 @@ class TritonAttnBackend(AttentionBackend):
             k_descale = 1.0
             v_descale = 1.0
 
+        if self.use_aiter_triton_extend_fwd:
+            self.extend_attention_fwd(
+                q_extend=q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+                k_extend=k.contiguous(),
+                v_extend=v.contiguous(),
+                o_extend=o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+                k_buffer=forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
+                v_buffer=forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
+                qo_indptr=self.forward_metadata.qo_indptr,
+                kv_indptr=kv_indptr,
+                kv_indices=kv_indices,
+                custom_mask=self.forward_metadata.custom_mask,
+                is_causal=causal,
+                mask_indptr=self.forward_metadata.mask_indptr,
+                max_len_extend=self.forward_metadata.max_extend_len,
+                sm_scale=layer.scaling,
+                logit_cap=logits_soft_cap,
+                k_scale=k_descale,
+                v_scale=v_descale,
+                sliding_window_size=sliding_window_size,
+                sinks=sinks,
+                window_kv_offsets=window_kv_offsets,
+                xai_temperature_len=layer.xai_temperature_len,
+            )
+            return o
         self.extend_attention_fwd(
             q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
             k.contiguous(),
