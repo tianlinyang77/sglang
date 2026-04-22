@@ -23,6 +23,8 @@ from sglang.srt.layers.attention.fla.utils import (
 from sglang.srt.layers.attention.fla.wy_fast import recompute_w_u_fwd
 from sglang.srt.utils import get_bool_env_var
 
+_use_prefill_aiter_linear_attn = get_bool_env_var("SGLANG_USE_AITER_LINEAR_ATTN")
+
 def chunk_gated_delta_rule_fwd(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -48,7 +50,6 @@ def chunk_gated_delta_rule_fwd(
         g_cumsum=g,
         cu_seqlens=cu_seqlens,
     )
-    _use_prefill_aiter_linear_attn = get_bool_env_var("SGLANG_USE_PREFILL_AITER_LINEAR_ATTN")
 
     if not _use_prefill_aiter_linear_attn:
         h, v_new = chunk_gated_delta_rule_fwd_h(
