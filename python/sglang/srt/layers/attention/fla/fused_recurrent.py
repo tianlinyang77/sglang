@@ -10,6 +10,7 @@ import triton.language as tl
 
 from sglang.srt.layers.attention.fla.op import exp
 from sglang.srt.layers.attention.fla.utils import input_guard
+from sglang.srt.utils import get_bool_env_var
 
 _use_decode_aiter_linear_attn = get_bool_env_var("SGLANG_USE_AITER_LINEAR_ATTN")
 
