@@ -1672,24 +1672,27 @@ class MLATokenToKVPool(KVCache):
         cache_k_rope: torch.Tensor,
     ):
         layer_id = layer.layer_id
-
         if self.nsa_kv_cache_store_fp8:
-            # OPTIMIZATION: Quantize k_nope and k_rope separately to avoid concat overhead
-            # This also enables reuse of set_mla_kv_buffer_triton two-tensor write path
-            # quantize_k_cache_separate returns (nope_part, rope_part) as uint8 bytes
-            cache_k_nope_fp8, cache_k_rope_fp8 = quantize_k_cache_separate(
-                cache_k_nope, cache_k_rope
-            )
-
-            # Reuse existing two-tensor write kernel (works with FP8 byte layout)
-            # cache_k_nope_fp8: (num_tokens, 1, 528) uint8 [nope_fp8(512) | scales(16)]
-            # cache_k_rope_fp8: (num_tokens, 1, 128) uint8 [rope_bf16_bytes(128)]
-            set_mla_kv_buffer_triton(
-                self.kv_buffer[layer_id - self.start_layer],
-                loc,
-                cache_k_nope_fp8,
-                cache_k_rope_fp8,
-            )
+            if _is_dcu:
+                from lightop import op
+                op.fused_quantize_and_store_mla_kv_cache(
+                    cache_k_nope, 
+                    cache_k_rope, 
+                    self.kv_buffer[layer_id - self.start_layer], 
+                    loc,
+                    "fp8_e4m3",
+                    1e-6,
+                )
+            else:
+                cache_k_nope_fp8, cache_k_rope_fp8 = quantize_k_cache_separate(
+                    cache_k_nope, cache_k_rope
+                )
+                set_mla_kv_buffer_triton(
+                    self.kv_buffer[layer_id - self.start_layer],
+                    loc,
+                    cache_k_nope_fp8,
+                    cache_k_rope_fp8,
+                )
         else:
             if cache_k_nope.dtype != self.dtype:
                 cache_k_nope = cache_k_nope.to(self.dtype)

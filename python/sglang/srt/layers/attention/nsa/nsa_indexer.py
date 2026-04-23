@@ -3,8 +3,9 @@ from __future__ import annotations
 import contextlib
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
-
 import torch
+import triton
+import triton.language as tl
 from einops import rearrange
 
 from sglang.jit_kernel.fused_store_index_cache import (
@@ -248,6 +249,48 @@ def rotate_activation(x: torch.Tensor, apply_scale: bool = True) -> torch.Tensor
     return  hadamard_transform_optimized(x, scale=scale) 
 
 
+@triton.jit
+def _fused_gate_scale_kernel(
+    weights_ptr, q_scale_ptr, out_ptr,
+    scale, M, K,
+    BLOCK_K: tl.constexpr
+):
+    pid_m = tl.program_id(0)
+    w = tl.load(weights_ptr + pid_m)
+    w_scaled = w * scale
+    row_start_idx = pid_m * K
+    for k_offset in range(0, K, BLOCK_K):
+        cols = k_offset + tl.arange(0, BLOCK_K)
+        mask = cols < K
+        
+        q_ptrs = q_scale_ptr + row_start_idx + cols
+        out_ptrs = out_ptr + row_start_idx + cols
+        q = tl.load(q_ptrs, mask=mask)
+        out = w_scaled * q
+        tl.store(out_ptrs, out, mask=mask)
+
+def fused_get_logits_head_gate_triton(weights, q_scale, n_heads, softmax_scale):
+    weights = weights.contiguous()
+    q_scale = q_scale.contiguous()
+    
+    K = q_scale.size(-1)
+    M = weights.numel() 
+    
+    out_dtype = torch.promote_types(weights.dtype, q_scale.dtype)
+    out = torch.empty_like(q_scale, dtype=out_dtype)
+    
+    scale = softmax_scale * (n_heads ** -0.5)
+    BLOCK_K = triton.next_power_of_2(K)
+    if BLOCK_K > 1024: BLOCK_K = 1024
+    
+    grid = (M, )
+    _fused_gate_scale_kernel[grid](
+        weights, q_scale, out,
+        scale, M, K,
+        BLOCK_K=BLOCK_K
+    )
+    return out
+
 class Indexer(MultiPlatformOp):
     def __init__(
         self,
@@ -374,9 +417,17 @@ class Indexer(MultiPlatformOp):
     @torch.compile(dynamic=True) if not _is_hip else lambda f: f
     def _get_logits_head_gate(self, x: torch.Tensor, q_scale: torch.Tensor):
         weights = self._weights_proj_bf16_in_fp32_out(x)
-        weights = weights * self.n_heads**-0.5
-        weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
-        return weights
+        if _is_dcu:
+            return fused_get_logits_head_gate_triton(
+                weights=weights, 
+                q_scale=q_scale, 
+                n_heads=self.n_heads, 
+                softmax_scale=self.softmax_scale
+            )
+        else:
+            weights = weights * self.n_heads**-0.5
+            weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
+            return weights
 
     def _get_q_k_bf16(
         self,
@@ -557,7 +608,7 @@ class Indexer(MultiPlatformOp):
                     seqlens_32, blocksize, self.sm_count
                 )
         elif _is_dcu: #nhb
-             schedule_metadata = gemmopt.get_paged_mqa_logits_metadata(seqlens_32, blocksize, self.sm_count)
+             schedule_metadata = None
 
         assert len(q_fp8.shape) == 3
         q_fp8 = q_fp8.unsqueeze(1)  # the next_n dim is 1 now
