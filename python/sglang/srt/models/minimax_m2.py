@@ -847,11 +847,12 @@ class MiniMaxM2Model(nn.Module):
         self.padding_idx = getattr(config, "pad_token_id", 0)
         self.vocab_size = config.vocab_size
         self.pp_group = get_pp_group()
-
-        self.embed_tokens = VocabParallelEmbedding(
+       
+        if self.pp_group.is_first_rank:
+            self.embed_tokens = VocabParallelEmbedding(
             config.vocab_size,
             config.hidden_size,
-        )
+            )
 
         def layer_fn(idx, prefix: str) -> nn.Module:
             return MiniMaxM2DecoderLayer(
@@ -927,7 +928,7 @@ class MiniMaxM2Model(nn.Module):
                         residual=residual,
                     )
 
-        if not self.pp_group.is_last_rank:
+        if not self.pp_group.is_last_rank:   
             return PPProxyTensors(
                 {"hidden_states": hidden_states, "residual": residual}
             )
@@ -967,12 +968,14 @@ class MiniMaxM2ForCausalLM(nn.Module):
 
         self.config = config
         self.quant_config = quant_config
-
+        self.pp_group = get_pp_group()
+        
         self.model = MiniMaxM2Model(
             config, quant_config, prefix=add_prefix("model", prefix)
         )
 
-        if get_pp_group().is_last_rank:
+        if self.pp_group.is_last_rank:
+                   
             self.lm_head = ParallelLMHead(
                 config.vocab_size,
                 config.hidden_size,
@@ -982,17 +985,23 @@ class MiniMaxM2ForCausalLM(nn.Module):
         else:
             self.lm_head = PPMissingLayer()
 
-        self.logits_processor = LogitsProcessor(config)
-        self.pp_group = get_pp_group()
+        self.logits_processor = LogitsProcessor(config)        
 
         # For EAGLE3
         self.capture_aux_hidden_states = False
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.get_input_embeddings(input_ids)
+    @property
+    def start_layer(self) -> int:
+        return self.model.start_layer
 
+    @property
+    def end_layer(self) -> int:
+        return self.model.end_layer
+    
     def set_eagle3_layers_to_capture(self, layer_ids: Optional[list[int]] = None):
-        if not get_pp_group().is_last_rank:
+        if not self.pp_group.is_last_rank:
             return
 
         self.capture_aux_hidden_states = True
