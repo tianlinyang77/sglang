@@ -1508,20 +1508,20 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         _pin = is_pin_memory_available(self.device)
         input_ids_tensor = torch.tensor(
             list(chain.from_iterable(input_ids)), dtype=torch.int64, pin_memory=_pin
-        ).to(self.device, non_blocking=True)
+        ).pin_memory().to(self.device, non_blocking=True)
         seq_lens_tensor = torch.tensor(seq_lens, dtype=torch.int64, pin_memory=_pin).to(
             self.device, non_blocking=True
         )
         seq_lens_cpu = torch.tensor(seq_lens, dtype=torch.int64)
         orig_seq_lens_tensor = torch.tensor(
             orig_seq_lens, dtype=torch.int32, pin_memory=_pin
-        ).to(self.device, non_blocking=True)
+        ).pin_memory().to(self.device, non_blocking=True)
 
         token_type_ids_tensor = None
         if len(token_type_ids) > 0:
             token_type_ids_tensor = torch.tensor(
                 sum(token_type_ids, []), dtype=torch.int64, pin_memory=_pin
-            ).to(self.device, non_blocking=True)
+            ).pin_memory().to(self.device, non_blocking=True)
 
         # Set batch fields needed by alloc_for_extend
         self.prefix_lens = prefix_lens
@@ -1662,7 +1662,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         self.orig_seq_lens = orig_seq_lens_tensor
         self.out_cache_loc = out_cache_loc
         self.input_embeds = (
-            torch.tensor(input_embeds, pin_memory=_pin).to(
+            torch.tensor(input_embeds, pin_memory=_pin).pin_memory().to(
                 self.device, non_blocking=True
             )
             if input_embeds
@@ -1674,7 +1674,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             for mm_item in mm_input.mm_items:
                 pixel_values = getattr(mm_item, "feature", None)
                 if isinstance(pixel_values, torch.Tensor):
-                    mm_item.feature = pixel_values.to(self.device, non_blocking=True)
+                    mm_item.feature = pixel_values.pin_memory().to(self.device, non_blocking=True)
                 elif isinstance(pixel_values, CudaIpcTensorTransportProxy):
                     mm_item.feature = pixel_values.reconstruct_on_target_device(
                         torch.cuda.current_device()
@@ -1687,7 +1687,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                         mm_item, "precomputed_embeddings", None
                     )
                     if isinstance(precomputed_embeddings, torch.Tensor):
-                        mm_item.precomputed_embeddings = precomputed_embeddings.to(
+                        mm_item.precomputed_embeddings = precomputed_embeddings.pin_memory().to(
                             self.device, non_blocking=True
                         )
         self.multimodal_inputs = multimodal_inputs

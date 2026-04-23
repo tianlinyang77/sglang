@@ -816,7 +816,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         self.mrope_positions = torch.cat(
             [pos for pos in mrope_positions_list],
             dim=1,
-        ).to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
+        ).pin_memory().to(dtype=torch.int64, device=model_runner.device, non_blocking=True)
 
     def get_max_chunk_capacity(self):
         # Maximum number of tokens in each chunk
