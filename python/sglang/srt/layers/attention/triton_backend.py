@@ -21,6 +21,7 @@ from sglang.srt.utils import (
     get_int_env_var,
     next_power_of_2,
 )
+from sglang.srt.server_args import get_global_server_args
 
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
@@ -666,7 +667,10 @@ class TritonAttnBackend(AttentionBackend):
                 )
             custom_mask = None
             mask_indptr = None
-            max_extend_len = num_tokens_per_bs
+            if get_global_server_args().enable_multi_layer_eagle:
+                max_extend_len = num_tokens_per_bs + self.speculative_num_steps - 1
+            else:
+                max_extend_len = num_tokens_per_bs
             num_kv_splits = None
             attn_logits = None
             attn_lse = None
