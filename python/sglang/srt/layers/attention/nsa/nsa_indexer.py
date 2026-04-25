@@ -8,10 +8,6 @@ import triton
 import triton.language as tl
 from einops import rearrange
 
-from sglang.jit_kernel.fused_store_index_cache import (
-    can_use_nsa_fused_store,
-    fused_store_index_k_cache,
-)
 from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import attn_tp_all_gather_into_tensor
 from sglang.srt.layers.layernorm import LayerNorm
@@ -30,6 +26,11 @@ _is_hip = is_hip()
 _is_npu = is_npu()
 _is_fp8_fnuz = is_fp8_fnuz()
 _is_dcu = is_dcu()
+if not _is_dcu:
+    from sglang.jit_kernel.fused_store_index_cache import (
+        can_use_nsa_fused_store,
+        fused_store_index_k_cache,
+    )
 if _is_cuda:
     try:
         import deep_gemm
@@ -1270,9 +1271,10 @@ class Indexer(MultiPlatformOp):
         layer_id: int,
         return_indices: bool = True,
     ) -> Optional[torch.Tensor]:
-        if _is_hip:
+        act_quant = None
+        if _is_hip and not _is_dcu:
             from sglang.srt.layers.attention.nsa.tilelang_kernel import act_quant
-        elif not _is_npu:
+        elif not _is_npu and not _is_dcu:
             from sglang.srt.layers.attention.nsa.triton_kernel import act_quant
         if TYPE_CHECKING:
             assert isinstance(forward_batch.token_to_kv_pool, NSATokenToKVPool)
