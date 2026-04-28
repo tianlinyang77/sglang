@@ -370,19 +370,27 @@ class CompressedTensorsW8A8Int8MarlinMoEMethod(CompressedTensorsMarlinMoEMethod)
         self,
         layer: torch.nn.Module,
         dispatch_output,
-        #local_expert_mapping,
+        # local_expert_mapping,
         i_q: Optional[torch.Tensor] = None,
-        i_s: Optional[torch.Tensor] = None, 
-    ) :
+        i_s: Optional[torch.Tensor] = None,
+    ):
         from sglang.srt.layers.moe.token_dispatcher.standard import StandardCombineInput
+        from sglang.srt.layers.moe.topk import apply_topk_weights_cpu
+
         x = dispatch_output.hidden_states
         topk_output = dispatch_output.topk_output
-        from sglang.srt.layers.moe.topk import apply_topk_weights_cpu
 
         topk_weights, topk_ids, _ = topk_output
         x, topk_weights = apply_topk_weights_cpu(
             self.moe_runner_config.apply_router_weight_on_input, topk_weights, x
         )
+
+        routed_scaling_factor = (
+            self.moe_runner_config.routed_scaling_factor
+            if self.moe_runner_config.routed_scaling_factor is not None
+            else 1.0
+        )
+
         output = torch.ops.sglang.fused_experts_impl_int8_marlin(
             x,
             layer.w13_weight,
@@ -395,28 +403,35 @@ class CompressedTensorsW8A8Int8MarlinMoEMethod(CompressedTensorsMarlinMoEMethod)
             use_int8_w8a8=True,
             per_channel_quant=True,
             global_num_experts=layer.moe_runner_config.num_experts,
-            w1_scale=(layer.w13_weight_scale),
-            w2_scale=(layer.w2_weight_scale),
+            w1_scale=layer.w13_weight_scale,
+            w2_scale=layer.w2_weight_scale,
             a1_scale=layer.w13_input_scale,
             a2_scale=layer.w2_input_scale,
             use_nn_moe=False,
-            routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
-            #expert_map=local_expert_mapping,
+            routed_scaling_factor=float(routed_scaling_factor),
+            # expert_map=local_expert_mapping,
         )
+
         return StandardCombineInput(hidden_states=output)
     
     def apply_with_shared_output(
         self,
         layer: torch.nn.Module,
         x: torch.Tensor,
-        activation: str='silu',
+        activation: str = "silu",
         shared_output: Optional[torch.Tensor] = None,
         topk_output=None,
         i_q: Optional[torch.Tensor] = None,
-        i_s: Optional[torch.Tensor] = None, 
+        i_s: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        # from sglang.srt.layers.moe.token_dispatcher.standard import StandardCombineInput
         topk_weights, topk_ids = topk_output.topk_weights, topk_output.topk_ids
+
+        routed_scaling_factor = (
+            self.moe_runner_config.routed_scaling_factor
+            if self.moe_runner_config.routed_scaling_factor is not None
+            else 1.0
+        )
+
         output = torch.ops.sglang.fused_experts_impl_int8_marlin(
             x,
             layer.w13_weight,
@@ -429,14 +444,15 @@ class CompressedTensorsW8A8Int8MarlinMoEMethod(CompressedTensorsMarlinMoEMethod)
             use_int8_w8a8=True,
             per_channel_quant=True,
             global_num_experts=layer.moe_runner_config.num_experts,
-            w1_scale=(layer.w13_weight_scale),
-            w2_scale=(layer.w2_weight_scale),
+            w1_scale=layer.w13_weight_scale,
+            w2_scale=layer.w2_weight_scale,
             a1_scale=layer.w13_input_scale,
             a2_scale=layer.w2_input_scale,
             use_nn_moe=False,
-            routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
+            routed_scaling_factor=float(routed_scaling_factor),
             shared_output=shared_output,
             i_q=i_q,
             i_s=i_s,
         )
-        return output  #StandardCombineInput(hidden_states=output)
+
+        return output

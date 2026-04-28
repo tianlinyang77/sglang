@@ -337,6 +337,11 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
             self.moe_runner_config.apply_router_weight_on_input, topk_weights, x
         )
         workspace, global_reduce_buffer = MarlinMoeWorkspace(x.device).get_buffers()
+        routed_scaling_factor = (
+            self.moe_runner_config.routed_scaling_factor
+            if self.moe_runner_config.routed_scaling_factor is not None
+            else 1.0
+        )
         output = fused_experts_impl_w4a8_marlin(
             x,
             layer.w13_weight,
@@ -357,7 +362,7 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
             a1_scale=layer.w13_input_scale,
             a2_scale=layer.w2_input_scale,
             use_nn_moe=False,
-            routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
+            routed_scaling_factor=routed_scaling_factor,
         )
         return StandardCombineInput(hidden_states=output)
 
@@ -379,6 +384,11 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
             self.moe_runner_config.apply_router_weight_on_input, topk_weights, x
         )
         workspace, global_reduce_buffer = MarlinMoeWorkspace(x.device).get_buffers()
+        routed_scaling_factor = (
+            self.moe_runner_config.routed_scaling_factor
+            if self.moe_runner_config.routed_scaling_factor is not None
+            else 1.0
+        )
         return fused_experts_impl_w4a8_marlin(
             x,
             layer.w13_weight,
@@ -399,7 +409,7 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
             a1_scale=layer.w13_input_scale,
             a2_scale=layer.w2_input_scale,
             use_nn_moe=False,
-            routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
+            routed_scaling_factor=routed_scaling_factor,
             shared_output=shared_output,
             i_q=i_q,
             i_s=i_s,
@@ -494,6 +504,7 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
         num_recv_tokens_per_expert: List = None,
         **_  ):
             workspace, global_reduce_buffer = MarlinMoeWorkspace(x.device).get_buffers()
+            routed_scaling_factor = 1.0 if routed_scaling_factor is None else routed_scaling_factor
             return fused_experts_impl_w4a8_marlin(
                 x,
                 w1,
@@ -514,7 +525,7 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
                 a1_scale=a1_scale,
                 use_nn_moe=use_nn_moe,
                 shared_output=shared_output,
-                routed_scaling_factor=routed_scaling_factor,
+                routed_scaling_factor=float(routed_scaling_factor),
                 # num_local_tokens=num_local_tokens,
                 #config_select_bs=config_select_bs,
                 #q_scales=scales

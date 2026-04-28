@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 import inspect
-import os
 import logging
 from contextlib import suppress
 from typing import (
@@ -73,14 +72,12 @@ _is_npu = is_npu()
 _is_hip = is_hip()
 
 from sglang.srt.layers.quantization.kv_cache import BaseKVCacheMethod
-from sglang.srt.layers.quantization.compressed_tensors import quant_ops as ops
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.token_dispatcher import (
         CombineInput,
         StandardDispatchOutput,
     )
     from sglang.srt.models.utils import WeightsMapper
-from sglang.srt.utils import W8a8GetCacheJSON
 
 logger = logging.getLogger(__name__)
 
@@ -926,37 +923,8 @@ class CompressedTensorsLinearMethod(LinearMethodBase):
     def __init__(self, quantization_config: CompressedTensorsConfig):
         self.quantization_config = quantization_config
         self.quant_config = quantization_config
-        self.tritonsingleton= W8a8GetCacheJSON()
-        self.w8a8_strategy=int(os.getenv('W8A8_SUPPORT_METHODS', '1'))
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        if hasattr(layer, 'weight'):
-            n=layer.weight.shape[0]
-            k=layer.weight.shape[1]
-        elif hasattr(layer, 'weight_packed'):
-            n=layer.weight_packed.shape[0]
-            k=layer.weight_packed.shape[1]
-        
-        if self.w8a8_strategy==1:
-            if [n,k] not in self.tritonsingleton.weight_shapes:
-                self.tritonsingleton.weight_shapes.append([n,k])
-                json_file=self.tritonsingleton.get_w8a8json_name(n,k)
-                configs_dict=self.tritonsingleton.get_triton_cache(json_file,n,k)
-                
-                if configs_dict:
-                    self.tritonsingleton.triton_json_dict.update(configs_dict)
-                    
-                    for key, value in configs_dict.items():
-                        m=int(key.split('_')[0])
-                        ops.triton_int8_gemm_helper(m=m,n=n,k=k,per_token_act_quant=True,per_out_channel_weight_quant=True,use_bias=False,device=layer.weight.device,best_config=value)
-        elif self.w8a8_strategy==3:
-            layer.weight.data = layer.weight.data.T
-        else: 
-            weight_data=layer.weight.data
-            _weight=weight_data.T.contiguous().reshape(n,-1)
-            layer.weight.data=_weight
-            
-        self.tritonsingleton.gen_model_json() 
         layer.scheme.process_weights_after_loading(layer)
 
     def create_weights(

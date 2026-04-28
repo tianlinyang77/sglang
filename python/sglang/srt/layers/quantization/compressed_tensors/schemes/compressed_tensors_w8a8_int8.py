@@ -108,6 +108,30 @@ class CompressedTensorsW8A8Int8(CompressedTensorsLinearScheme):
         return 80
 
     def process_weights_after_loading(self, layer) -> None:
+        n=layer.weight.shape[0]
+        k=layer.weight.shape[1]
+
+        if self.w8a8_strategy==1:
+            if [n,k] not in W8A8_TRITONJSON.weight_shapes:
+                W8A8_TRITONJSON.weight_shapes.append([n,k])
+                json_file=W8A8_TRITONJSON.get_w8a8json_name(n,k)
+                configs_dict=W8A8_TRITONJSON.get_triton_cache(json_file,n,k)
+
+                if configs_dict:
+                    W8A8_TRITONJSON.triton_json_dict.update(configs_dict)
+
+                    for key, value in configs_dict.items():
+                        m=int(key.split('_')[0])
+                        ops.triton_int8_gemm_helper(m=m,n=n,k=k,per_token_act_quant=True,per_out_channel_weight_quant=True,use_bias=False,device=layer.weight.device,best_config=value)
+        elif self.w8a8_strategy==3:
+            layer.weight.data = layer.weight.data.T
+        else:
+            weight_data=layer.weight.data
+            _weight=weight_data.T.contiguous().reshape(n,-1)
+            layer.weight.data=_weight
+
+        W8A8_TRITONJSON.gen_model_json()
+
         # If per tensor, when we have a fused module (e.g. QKV) with per
         # tensor scales (thus N scales being passed to the kernel),
         # requantize so we can always run per channel
