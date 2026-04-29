@@ -103,7 +103,6 @@ def m_grouped_w4a8_gemm_nt_masked_wrapper(
         d,
         masked_m,
         expected_m_per_group,
-        config={"MODE": 1000, }
     )
 
 
@@ -1200,6 +1199,9 @@ class DeepEPMoE(FusedMoE):
         )
 
         q_a2_all, q_a2_scale = torch.ops.sglang.fuse_silu_mul_quant_ep(gateup_output, masked_m)
+        # The first-stage BF16 activation is no longer needed after quantization.
+        # Releasing it here lowers peak memory during low-latency graph capture.
+        del gateup_output
 
         # ---- second GEMM ----
         n2 = w2_scales.size(1)
@@ -1249,6 +1251,9 @@ class DeepEPMoE(FusedMoE):
         )
 
         q_a2_all, q_a2_scale = torch.ops.sglang.fuse_silu_mul_quant_ep(gateup_output, masked_m)
+        # The first-stage BF16 activation is no longer needed after quantization.
+        # Releasing it here lowers peak memory during low-latency graph capture.
+        del gateup_output
 
         # ---- second GEMM ----
         n2 = w2_scales.size(1)
@@ -1299,6 +1304,9 @@ class DeepEPMoE(FusedMoE):
         q_a2_all, q_a2_scale = fuse_silu_mul_fp8_quant_ep(input=gateup_output,
                                                           fp8type=0,
                                                           tokens_per_expert=masked_m)
+        # The first-stage BF16 activation is no longer needed after quantization.
+        # Releasing it here lowers peak memory during low-latency graph capture.
+        del gateup_output
 
         # ---- second GEMM ----
         n2 = w2_scales.size(1)
@@ -1353,6 +1361,9 @@ class DeepEPMoE(FusedMoE):
 
         q_a2_all = torch.empty((num_groups, m, n1 // 2), device=hidden_states.device, dtype=torch.bfloat16)
         fuse_silu_and_mul(input=gateup_output, output=q_a2_all)
+        # The first-stage BF16 activation is no longer needed after SiLU*mul.
+        # Releasing it here lowers peak memory during low-latency graph capture.
+        del gateup_output
         # ---- second GEMM ----
         n2 = w2_weight.size(1)
         down_output = torch.empty((num_groups, m, n2), device=q_a2_all.device, dtype=torch.bfloat16)

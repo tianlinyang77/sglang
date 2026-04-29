@@ -12,7 +12,12 @@ from sglang.srt.layers.quantization import QuantizationConfig
 from sglang.srt.layers.quantization.w4a8_utils import w4a8_weight_repack_impl
 from sglang.srt.layers.quantization.base_config import (FusedMoEMethodBase, QuantizeMethodBase)
 from sglang.srt.layers.quantization.slimquant_w4a8 import SlimQuantW4A8Int8LinearMethod
-from sglang.srt.layers.moe import MoeRunner, MoeRunnerBackend, MoeRunnerConfig
+from sglang.srt.layers.moe import (
+    MoeRunner,
+    MoeRunnerBackend,
+    MoeRunnerConfig,
+    get_moe_a2a_backend,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +251,7 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
 
     def __init__(self, quant_config):
         self.quant_config = quant_config
+        self.use_deepep = get_moe_a2a_backend().is_deepep()
 
     def create_weights(
         self,
@@ -302,10 +308,16 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         layer.w13_weight = Parameter(
-            w4a8_weight_repack_impl(layer.w13_weight), requires_grad=False
+            w4a8_weight_repack_impl(
+                layer.w13_weight, use_deepep=self.use_deepep
+            ),
+            requires_grad=False,
         )
         layer.w2_weight = Parameter(
-            w4a8_weight_repack_impl(layer.w2_weight), requires_grad=False
+            w4a8_weight_repack_impl(
+                layer.w2_weight, use_deepep=self.use_deepep
+            ),
+            requires_grad=False,
         )
         layer.w13_weight_scale = Parameter(
             layer.w13_weight_scale.data, requires_grad=False

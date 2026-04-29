@@ -6,7 +6,6 @@ try:
     use_lightop = False
 except Exception:
     use_lightop = False
-
 def unpack_int8_to_int4(tensor_int8: torch.Tensor) -> torch.Tensor:
     """
     将[N, K//2]大小的torch.int8 Tensor，转换为[N, K]大小的torch.int32 Tensor。
@@ -75,8 +74,98 @@ def w4a8_2_marlin_weight(w4a8_w):
     marlin_q_w = marlin_weights(full_w4a8_w, weight_perm, k_tile=32, n_tile=64, pack_factor=8)
     return marlin_q_w
 
-def w4a8_weight_repack_impl(input):
-    if use_lightop:
+
+def weight8bit_nt_kpack2_marlin2(
+    weight: torch.Tensor,
+    k_tile: int = 16,
+    k_tile1: int = 4,
+    n_tile: int = 16,
+):
+    assert weight.element_size() == 1, "weight must be 8-bit"
+    if weight.dim() == 2:
+        size_n, size_k = weight.shape
+        assert size_n % n_tile == 0 and size_k % (k_tile * k_tile1) == 0
+        q = weight.reshape(
+            size_n // n_tile,
+            n_tile,
+            size_k // (k_tile * k_tile1),
+            k_tile1,
+            k_tile,
+        )
+        q = q.permute(2, 0, 3, 1, 4).contiguous()
+    elif weight.dim() == 3:
+        e, size_n, size_k = weight.shape
+        assert size_n % n_tile == 0 and size_k % (k_tile * k_tile1) == 0
+        q = weight.reshape(
+            e,
+            size_n // n_tile,
+            n_tile,
+            size_k // (k_tile * k_tile1),
+            k_tile1,
+            k_tile,
+        )
+        q = q.permute(0, 3, 1, 4, 2, 5).contiguous()
+    else:
+        raise ValueError(f"Unsupported weight dim: {weight.dim()}")
+    return q
+
+
+def _unpack_int8_to_uint4_int8(tensor_int8: torch.Tensor) -> torch.Tensor:
+    if tensor_int8.dtype != torch.int8:
+        raise ValueError("Input tensor must be of type torch.int8")
+
+    tensor_uint8 = tensor_int8.to(torch.uint8)
+    high4 = (tensor_uint8 >> 4) & 0x0F
+    low4 = tensor_uint8 & 0x0F
+
+    unpacked_shape = (*tensor_int8.shape[:-1], tensor_int8.shape[-1] * 2)
+    unpacked = torch.empty(unpacked_shape, dtype=torch.int8, device=tensor_int8.device)
+    unpacked[..., 0::2] = high4.to(torch.int8)
+    unpacked[..., 1::2] = low4.to(torch.int8)
+    return unpacked
+
+
+def _pack_uint4_qqq_to_int32(
+    q: torch.Tensor,
+    pack_order=(0, 4, 1, 5, 2, 6, 3, 7),
+) -> torch.Tensor:
+    if q.shape[-1] % 8 != 0:
+        raise ValueError("The last dimension of q must be divisible by 8")
+
+    order = torch.tensor(pack_order, dtype=torch.long, device=q.device)
+    if order.numel() != 8:
+        raise ValueError("pack_order must contain exactly 8 elements")
+
+    q_shape = q.shape
+    q = q.reshape(-1, 8)[:, order].to(torch.int32) & 0x0F
+
+    packed = torch.zeros((q.shape[0],), dtype=torch.int32, device=q.device)
+    for i in range(8):
+        packed |= q[:, i] << (4 * i)
+
+    return packed.reshape(*q_shape[:-1], q_shape[-1] // 8)
+
+
+def weight4bit_nt_kpack2_marlin2_qqq_from_packed(
+    weight: torch.Tensor,
+    k_tile: int = 16,
+    k_tile1: int = 4,
+    n_tile: int = 16,
+    pack_order=(0, 4, 1, 5, 2, 6, 3, 7),
+):
+    full_weight = _unpack_int8_to_uint4_int8(weight)
+    q = weight8bit_nt_kpack2_marlin2(
+        full_weight,
+        k_tile=k_tile,
+        k_tile1=k_tile1,
+        n_tile=n_tile,
+    )
+    return _pack_uint4_qqq_to_int32(q, pack_order=pack_order)
+
+def w4a8_weight_repack_impl(input, use_deepep: bool = False):
+    if use_deepep:
+        output = weight4bit_nt_kpack2_marlin2_qqq_from_packed(input)
+    elif use_lightop:
         size_batch = input.shape[0]
         size_n = input.shape[1]
         size_k = input.shape[2] * 2
