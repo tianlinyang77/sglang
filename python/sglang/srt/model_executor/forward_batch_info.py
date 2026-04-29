@@ -716,7 +716,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                     if mm_inputs[batch_idx] is None
                     else mm_inputs[batch_idx].mrope_position_delta.squeeze(0)
                 )
-                mrope_deltas.append(mrope_delta.to(device=device))
+                mrope_deltas.append(mrope_delta.pin_memory().to(device=device, non_blocking=True))
             position_chunks = torch.split(batch.spec_info.positions, extend_lens)
             mrope_positions_list = [
                 pos_chunk + delta
@@ -736,7 +736,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 )
                 for i in range(batch_size)
             ]
-            mrope_delta_tensor = torch.stack(mrope_deltas, dim=0).to(device=device)
+            mrope_delta_tensor = torch.stack(mrope_deltas, dim=0).pin_memory().to(device=device, non_blocking=True)
             next_input_positions = (
                 (seq_positions + mrope_delta_tensor).flatten().unsqueeze(0).repeat(3, 1)
             )

@@ -811,7 +811,7 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
 
         x = x.unsqueeze(1)
 
-        cu_seqlens = cu_seqlens.pin_memory().to(self.device, non_blocking=True)
+        cu_seqlens = cu_seqlens.to(self.device, non_blocking=True)
 
         deepstack_feature_lists = []
         num_deepstack_captured = 0
