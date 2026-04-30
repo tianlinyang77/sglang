@@ -164,7 +164,7 @@ def weight4bit_nt_kpack2_marlin2_qqq_from_packed(
 
 def w4a8_weight_repack_impl(input, use_deepep: bool = False):
     if use_deepep:
-        output = weight4bit_nt_kpack2_marlin2_qqq_from_packed(input)
+        output = weight4bit_nt_kpack2_marlin2_qqq_from_packed_mem_efficient(input)
     elif use_lightop:
         size_batch = input.shape[0]
         size_n = input.shape[1]
@@ -179,3 +179,147 @@ def w4a8_weight_repack_impl(input, use_deepep: bool = False):
         output = torch.stack(w_marlin_list, dim=0)
 
     return output
+
+
+
+def weight4bit_nt_kpack2_marlin2_qqq_from_packed_mem_efficient(
+    weight: torch.Tensor,
+    k_tile: int = 16,
+    k_tile1: int = 4,
+    n_tile: int = 16,
+    pack_order=(0, 4, 1, 5, 2, 6, 3, 7),
+) -> torch.Tensor:
+    """
+    packed int4 权重 -> marlin2 排布 -> QQQ int32 pack，省显存版本。
+    输入:
+        2D: [size_n, size_k // 2], dtype=torch.int8
+        3D: [E, size_n, size_k // 2], dtype=torch.int8
+    输出:
+        2D:
+            [size_k // (k_tile * k_tile1),
+             size_n // n_tile,
+             k_tile1,
+             n_tile,
+             k_tile // 8]
+        3D:
+            [E,
+             size_k // (k_tile * k_tile1),
+             size_n // n_tile,
+             k_tile1,
+             n_tile,
+             k_tile // 8]
+    """
+    if weight.dtype != torch.int8:
+        raise ValueError("weight 必须是 torch.int8")
+    if k_tile % 8 != 0:
+        raise ValueError("k_tile 必须能被 8 整除，因为最后每 8 个 int4 pack 成 int32")
+    if (k_tile * k_tile1) % 2 != 0:
+        raise ValueError("k_tile * k_tile1 必须能被 2 整除，因为输入是每 2 个 int4 pack 成 1 个 int8")
+    pack_order_t = torch.tensor(pack_order, dtype=torch.long, device=weight.device)
+    if pack_order_t.numel() != 8:
+        raise ValueError("pack_order 必须包含 8 个元素")
+    k_block = k_tile * k_tile1
+    byte_block = k_block // 2
+    if weight.dim() == 2:
+        size_n, packed_k = weight.shape
+        size_k = packed_k * 2
+        if size_n % n_tile != 0:
+            raise ValueError("size_n 必须能被 n_tile 整除")
+        if size_k % k_block != 0:
+            raise ValueError("size_k 必须能被 k_tile * k_tile1 整除")
+        n_blocks = size_n // n_tile
+        k_blocks = size_k // k_block
+        out = torch.empty(
+            (k_blocks, n_blocks, k_tile1, n_tile, k_tile // 8),
+            dtype=torch.int32,
+            device=weight.device,
+        )
+        for kb in range(k_blocks):
+            byte_start = kb * byte_block
+            byte_end = byte_start + byte_block
+            # [size_n, byte_block] -> [size_n, k_tile * k_tile1]
+            block = _unpack_int8_to_uint4_int8_small(weight[:, byte_start:byte_end])
+            # 原逻辑:
+            # [N, Kblock]
+            # -> [N // n_tile, n_tile, k_tile1, k_tile]
+            # -> [N // n_tile, k_tile1, n_tile, k_tile]
+            block = block.reshape(n_blocks, n_tile, k_tile1, k_tile)
+            block = block.permute(0, 2, 1, 3)
+            # [n_blocks, k_tile1, n_tile, k_tile]
+            # -> [n_blocks, k_tile1, n_tile, k_tile // 8]
+            out[kb] = _pack_uint4_qqq_to_int32_lastdim_small(
+                block,
+                pack_order_t,
+            )
+        return out
+    elif weight.dim() == 3:
+        E, size_n, packed_k = weight.shape
+        size_k = packed_k * 2
+        if size_n % n_tile != 0:
+            raise ValueError("size_n 必须能被 n_tile 整除")
+        if size_k % k_block != 0:
+            raise ValueError("size_k 必须能被 k_tile * k_tile1 整除")
+        n_blocks = size_n // n_tile
+        k_blocks = size_k // k_block
+        out = torch.empty(
+            (E, k_blocks, n_blocks, k_tile1, n_tile, k_tile // 8),
+            dtype=torch.int32,
+            device=weight.device,
+        )
+        for kb in range(k_blocks):
+            byte_start = kb * byte_block
+            byte_end = byte_start + byte_block
+            # [E, size_n, byte_block] -> [E, size_n, k_tile * k_tile1]
+            block = _unpack_int8_to_uint4_int8_small(weight[:, :, byte_start:byte_end])
+            # 原逻辑:
+            # [E, N, Kblock]
+            # -> [E, N // n_tile, n_tile, k_tile1, k_tile]
+            # -> [E, N // n_tile, k_tile1, n_tile, k_tile]
+            block = block.reshape(E, n_blocks, n_tile, k_tile1, k_tile)
+            block = block.permute(0, 1, 3, 2, 4)
+            # [E, n_blocks, k_tile1, n_tile, k_tile]
+            # -> [E, n_blocks, k_tile1, n_tile, k_tile // 8]
+            out[:, kb] = _pack_uint4_qqq_to_int32_lastdim_small(
+                block,
+                pack_order_t,
+            )
+        return out
+    else:
+        raise ValueError("weight 只支持 2D 或 3D")
+    
+def _unpack_int8_to_uint4_int8_small(tensor_int8: torch.Tensor) -> torch.Tensor:
+    """
+    小块解包版本。
+    输入 [..., K//2] int8
+    输出 [..., K] int8，每个元素只使用低 4 bit。
+    """
+    tensor_uint8 = tensor_int8.to(torch.uint8)
+    high4 = (tensor_uint8 >> 4) & 0x0F
+    low4 = tensor_uint8 & 0x0F
+    out_shape = (*tensor_int8.shape[:-1], tensor_int8.shape[-1] * 2)
+    out = torch.empty(out_shape, dtype=torch.int8, device=tensor_int8.device)
+    out[..., 0::2] = high4.to(torch.int8)
+    out[..., 1::2] = low4.to(torch.int8)
+    return out
+
+def _pack_uint4_qqq_to_int32_lastdim_small(
+    q: torch.Tensor,
+    pack_order_t: torch.Tensor,
+) -> torch.Tensor:
+    """
+    只在最后一维做 pack。
+    输入 q: [..., K]，K 必须能被 8 整除。
+    输出: [..., K // 8] int32
+    """
+    if q.shape[-1] % 8 != 0:
+        raise ValueError("q 的最后一维必须能被 8 整除")
+    q = q.reshape(*q.shape[:-1], q.shape[-1] // 8, 8)
+    packed = torch.zeros(
+        (*q.shape[:-1],),
+        dtype=torch.int32,
+        device=q.device,
+    )
+    for i in range(8):
+        v = q[..., pack_order_t[i]].to(torch.int32) & 0x0F
+        packed |= v << (4 * i)
+    return packed
