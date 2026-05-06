@@ -861,8 +861,8 @@ class MHATokenToKVPoolHostDCU(HostKVCache):
                transfer_kv_all_direct_pf_lf_H2D_dcu(
                     src_ptrs_k=self.k_buffer,
                     src_ptrs_v=self.v_buffer,
-                    dst_ptrs_k=device_pool.k_buffer[layer_id],
-                    dst_ptrs_v=device_pool.v_buffer[layer_id],
+                    dst_ptrs_k=device_pool.k_buffer,
+                    dst_ptrs_v=device_pool.v_buffer,
                     src_indices=device_indices,
                     dst_indices=host_indices,
                     start_layer_id=layer_id,
