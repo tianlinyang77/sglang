@@ -21,9 +21,6 @@ from sglang.srt.layers.attention.fla.utils import (
     input_guard,
 )
 from sglang.srt.layers.attention.fla.wy_fast import recompute_w_u_fwd
-from sglang.srt.utils import get_bool_env_var
-
-_use_prefill_aiter_linear_attn = get_bool_env_var("SGLANG_USE_AITER_LINEAR_ATTN")
 
 def chunk_gated_delta_rule_fwd(
     q: torch.Tensor,
@@ -51,35 +48,15 @@ def chunk_gated_delta_rule_fwd(
         cu_seqlens=cu_seqlens,
     )
 
-    if not _use_prefill_aiter_linear_attn:
-        h, v_new = chunk_gated_delta_rule_fwd_h(
-            k=k,
-            w=w,
-            u=u,
-            g=g,
-            initial_state=initial_state,
-            initial_state_indices=initial_state_indices,
-            cu_seqlens=cu_seqlens,
-        )
-    else:
-        # ===== 新接口 =====
-        from aiter.ops.triton.fla.chunk_delta_h import (
-            chunk_gated_delta_rule_fwd_h as chunk_gated_delta_rule_fwd_h_aiter,
-            prepare_chunk_indices,
-        )
-        chunk_size = 64
-
-        h, v_new, _ = chunk_gated_delta_rule_fwd_h_aiter(
-            k=k,
-            w=w,
-            u=u,
-            g=g,
-            initial_state=initial_state,
-            initial_state_indices=initial_state_indices,
-            output_final_state=True,                 
-            chunk_size=chunk_size,                  
-            cu_seqlens=cu_seqlens,
-        )
+    h, v_new = chunk_gated_delta_rule_fwd_h(
+        k=k,
+        w=w,
+        u=u,
+        g=g,
+        initial_state=initial_state,
+        initial_state_indices=initial_state_indices,
+        cu_seqlens=cu_seqlens,
+    )
     o = chunk_fwd_o(
         q=q,
         k=k,

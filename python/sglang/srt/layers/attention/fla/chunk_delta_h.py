@@ -18,6 +18,8 @@ from sglang.srt.layers.attention.fla.utils import is_nvidia_hopper
 NUM_WARPS = [2, 4] if is_nvidia_hopper else [2, 4, 8, 16]
 CHUNK_SIZE = 64
 
+from sglang.srt.utils import get_bool_env_var
+_use_prefill_aiter_linear_attn = get_bool_env_var("SGLANG_USE_AITER_LINEAR_ATTN")
 
 # @triton.autotune(
 #     configs=[
@@ -308,33 +310,62 @@ def chunk_gated_delta_rule_fwd_h(
 
     def grid(meta):
         return (triton.cdiv(V, meta["BV"]), N * H)
-
-    chunk_gated_delta_rule_fwd_kernel_h_blockdim64[grid](
-        k=k,
-        v=u,
-        w=w,
-        v_new=v_new,
-        g=g,
-        gk=gk,
-        h=h,
-        initial_state=initial_state,
-        initial_state_indices=initial_state_indices,
-        cu_seqlens=cu_seqlens,
-        chunk_offsets=chunk_offsets,
-        T=T,
-        H=H,
-        Hg=Hg,
-        K=K,
-        V=V,
-        BT=BT,
-        BV=32,
-        USE_G=g is not None,
-        USE_GK=gk is not None,
-        USE_INITIAL_STATE=initial_state is not None,
-        INPLACE_UPDATE=True,
-        SAVE_NEW_VALUE=v_new is not None,
-        IS_VARLEN=cu_seqlens is not None,
-        num_warps=4,
-        num_stages=2,
-    )
+    
+    if not _use_prefill_aiter_linear_attn:
+        chunk_gated_delta_rule_fwd_kernel_h_blockdim64[grid](
+            k=k,
+            v=u,
+            w=w,
+            v_new=v_new,
+            g=g,
+            gk=gk,
+            h=h,
+            initial_state=initial_state,
+            initial_state_indices=initial_state_indices,
+            cu_seqlens=cu_seqlens,
+            chunk_offsets=chunk_offsets,
+            T=T,
+            H=H,
+            Hg=Hg,
+            K=K,
+            V=V,
+            BT=BT,
+            BV=32,
+            USE_G=g is not None,
+            USE_GK=gk is not None,
+            USE_INITIAL_STATE=initial_state is not None,
+            INPLACE_UPDATE=True,
+            SAVE_NEW_VALUE=v_new is not None,
+            IS_VARLEN=cu_seqlens is not None,
+            num_warps=4,
+            num_stages=2,
+        )
+    else:
+        from aiter.ops.triton.fla.chunk_delta_h import chunk_gated_delta_rule_fwd_kernel_h_blockdim64, _get_chunk_delta_h_config
+        cfg = _get_chunk_delta_h_config(K, V, BT, True)
+        chunk_gated_delta_rule_fwd_kernel_h_blockdim64[grid](
+            k=k,
+            v=u,
+            w=w,
+            v_new=v_new,
+            g=g,
+            gk=gk,
+            h=h,
+            h0=initial_state,
+            initial_state_indices=initial_state_indices,
+            ht=None,
+            cu_seqlens=cu_seqlens,
+            chunk_offsets=chunk_offsets,
+            T=T,
+            H=H,
+            Hg=Hg,
+            K=K,
+            V=V,
+            BT=BT,
+            BV=cfg["BV"],
+            USE_EXP2=False,
+            TRANSPOSE_STATE=True,
+            num_warps=cfg["num_warps"],
+            num_stages=cfg["num_stages"],
+        )
     return h, v_new
