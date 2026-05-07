@@ -162,7 +162,7 @@ def is_dcu() -> bool:
     try:
         props = torch.cuda.get_device_properties(0)
         gcn_arch = getattr(props, "gcnArchName", "")
-        supported_archs = ["gfx936", "gfx938"]
+        supported_archs = ["gfx936", "gfx938", "gfx928"]
         return any(gfx in gcn_arch for gfx in supported_archs)
     except Exception as e:
         logger.warning("DCU detection failed (not a DCU or HIP misconfigured): %s", e)
