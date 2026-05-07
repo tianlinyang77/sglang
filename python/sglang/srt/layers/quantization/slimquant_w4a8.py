@@ -14,7 +14,8 @@ from sglang.srt.layers.parameter import (
 from lmslim.layers.gemm.int8_utils import (
     per_token_group_quant_int8,
     per_token_quant_int8)
-from lmslim import quant_tools, quant_ops
+from lmslim import quant_tools
+from sglang.srt.layers.quantization.compressed_tensors import quant_ops
 from sglang.srt.utils import W8a8GetCacheJSON
 from sglang.srt.layers.moe import MoeRunner, MoeRunnerBackend, MoeRunnerConfig
 
@@ -118,6 +119,8 @@ class SlimQuantW4A8Int8LinearMethod(LinearMethodBase):
                     for key, value in configs_dict.items():
                         m=int(key.split('_')[0])
                         quant_tools.triton_int8_gemm_helper(m=m,n=n,k=k,per_token_act_quant=True,per_out_channel_weight_quant=True,use_bias=False,device=layer.weight.device,best_config=value)
+        elif self.w8a8_strategy==3:
+            layer.weight.data = layer.weight.data.T
         else: 
             weight_data=layer.weight.data
             _weight=weight_data.T.contiguous().reshape(n,-1)
