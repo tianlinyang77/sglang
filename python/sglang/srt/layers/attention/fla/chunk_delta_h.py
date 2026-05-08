@@ -341,31 +341,29 @@ def chunk_gated_delta_rule_fwd_h(
             num_stages=2,
         )
     else:
-        from aiter.ops.triton.fla.chunk_delta_h import chunk_gated_delta_rule_fwd_kernel_h_blockdim64, _get_chunk_delta_h_config
-        cfg = _get_chunk_delta_h_config(K, V, BT, True)
-        chunk_gated_delta_rule_fwd_kernel_h_blockdim64[grid](
+        from aiter.ops.triton.fla.chunk_delta_h import launch_chunk_gated_delta_rule_fwd_kernel_h_blockdim64
+        launch_chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
             k=k,
-            v=u,
+            u=u,
             w=w,
             v_new=v_new,
             g=g,
             gk=gk,
             h=h,
-            h0=initial_state,
+            initial_state=initial_state,
             initial_state_indices=initial_state_indices,
-            ht=None,
+            final_state=None,
             cu_seqlens=cu_seqlens,
             chunk_offsets=chunk_offsets,
+            N=N,
             T=T,
             H=H,
             Hg=Hg,
             K=K,
             V=V,
             BT=BT,
-            BV=cfg["BV"],
-            USE_EXP2=False,
-            TRANSPOSE_STATE=True,
-            num_warps=cfg["num_warps"],
-            num_stages=cfg["num_stages"],
+            use_exp2=False,
+            transpose_state_layout=True,
+            kernel_cfg=None,
         )
     return h, v_new
