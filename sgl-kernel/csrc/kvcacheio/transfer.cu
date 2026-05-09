@@ -20,16 +20,36 @@
 constexpr int32_t TOKEN_HIT = 0xFFFFFFFF;
 constexpr int32_t HASH_EMPTY = -1;
 
+#ifdef USE_ROCM
+namespace {
+
+void* get_rocm_kernel_accessible_ptr(const at::Tensor& tensor) {
+  if (!tensor.defined()) {
+    return nullptr;
+  }
+
+  void* ptr = tensor.data_ptr();
+  if (tensor.is_cuda() || ptr == nullptr) {
+    return ptr;
+  }
+
+  void* device_ptr = nullptr;
+  cudaError_t err = cudaHostGetDevicePointer(&device_ptr, ptr, 0);
+  TORCH_CHECK(
+      err == cudaSuccess,
+      "cudaHostGetDevicePointer failed for ROCm KV cache transfer host tensor: ",
+      cudaGetErrorString(err));
+  return device_ptr;
+}
+
+}  // namespace
+#endif
+
 __device__ __forceinline__ void
 transfer_item_warp(int32_t lane_id, const void* src_addr, void* dst_addr, int64_t item_size_bytes,bool isk = true) {
   const uint64_t* __restrict__ src = static_cast<const uint64_t*>(src_addr);
   uint64_t* __restrict__ dst = static_cast<uint64_t*>(dst_addr);
-  int total_chunks = 0;
-  if(isk){
-    total_chunks = item_size_bytes / sizeof(uint64_t);
-  }else{
-    total_chunks = item_size_bytes / sizeof(uint8_t);
-  }
+  const int total_chunks = item_size_bytes / sizeof(uint64_t);
 
 
 #pragma unroll
@@ -352,6 +372,14 @@ void transfer_kv_launcher_dcu(
   void* dst_k_ptr = dst_k.defined() ? dst_k.data_ptr() : nullptr;
   const void* src_v_ptr = IsMLA || !src_v.defined() ? nullptr : src_v.data_ptr();
   void* dst_v_ptr = IsMLA || !dst_v.defined() ? nullptr : dst_v.data_ptr();
+#ifdef USE_ROCM
+  src_k_ptr = get_rocm_kernel_accessible_ptr(src_k);
+  dst_k_ptr = get_rocm_kernel_accessible_ptr(dst_k);
+  if constexpr (!IsMLA) {
+    src_v_ptr = get_rocm_kernel_accessible_ptr(src_v);
+    dst_v_ptr = get_rocm_kernel_accessible_ptr(dst_v);
+  }
+#endif
   const uintptr_t* src_k_tbl_ptr = src_k_layers.defined() ? src_k_layers.data_ptr<uintptr_t>() : nullptr;
   const uintptr_t* dst_k_tbl_ptr = dst_k_layers.defined() ? dst_k_layers.data_ptr<uintptr_t>() : nullptr;
   const uintptr_t* src_v_tbl_ptr = IsMLA || !src_v_layers.defined() ? nullptr : src_v_layers.data_ptr<uintptr_t>();
@@ -550,15 +578,11 @@ __global__ void transfer_kernel_impl(
     
     // Loop over layers if necessary
     for (int64_t layer_id = start_layer_id; layer_id < start_layer_id + num_layers_to_process; ++layer_id) {
-      if ( blockIdx.x == 0 && threadIdx.x == 0 && item_id == 0 && layer_id == 0){
-        const char* src_ptr = SrcOffsetFn(
-            static_cast<const char*>(src_k), src_k_layer_tbl, layer_id, src_layout_dim, src_page_id, item_size_bytes);
-        char* dst_ptr = DstOffsetFn(
-            static_cast<char*>(dst_k), dst_k_layer_tbl, layer_id, dst_layout_dim, dst_page_id, item_size_bytes);
-        // printf("DEBUG src_ptr:%p,src_ptr:%lu,dst_ptr:%p,dst_ptr:%lu,dst_page_id:%ld,src_page_id:%ld\n",(void*)&src_ptr,(uintptr_t)&src_ptr,(void*)dst_ptr,(uintptr_t)&dst_ptr,dst_page_id,src_page_id);
-        transfer_item_warp(lane_id, src_ptr, dst_ptr, item_size_bytes);
-        // printf("DEBUG finish\n");
-      }
+      const char* src_ptr = SrcOffsetFn(
+          static_cast<const char*>(src_k), src_k_layer_tbl, layer_id, src_layout_dim, src_page_id, item_size_bytes);
+      char* dst_ptr = DstOffsetFn(
+          static_cast<char*>(dst_k), dst_k_layer_tbl, layer_id, dst_layout_dim, dst_page_id, item_size_bytes);
+      transfer_item_warp(lane_id, src_ptr, dst_ptr, item_size_bytes);
       if constexpr (!IsMLA) {
         const char* src_v_ptr = SrcOffsetFn(
             static_cast<const char*>(src_v), src_v_layer_tbl, layer_id, src_layout_dim, src_page_id, item_size_bytes);
@@ -609,6 +633,14 @@ void transfer_kv_launcher(
   void* dst_k_ptr = dst_k.defined() ? dst_k.data_ptr() : nullptr;
   const void* src_v_ptr = IsMLA || !src_v.defined() ? nullptr : src_v.data_ptr();
   void* dst_v_ptr = IsMLA || !dst_v.defined() ? nullptr : dst_v.data_ptr();
+#ifdef USE_ROCM
+  src_k_ptr = get_rocm_kernel_accessible_ptr(src_k);
+  dst_k_ptr = get_rocm_kernel_accessible_ptr(dst_k);
+  if constexpr (!IsMLA) {
+    src_v_ptr = get_rocm_kernel_accessible_ptr(src_v);
+    dst_v_ptr = get_rocm_kernel_accessible_ptr(dst_v);
+  }
+#endif
   const uintptr_t* src_k_tbl_ptr = src_k_layers.defined() ? src_k_layers.data_ptr<uintptr_t>() : nullptr;
   const uintptr_t* dst_k_tbl_ptr = dst_k_layers.defined() ? dst_k_layers.data_ptr<uintptr_t>() : nullptr;
   const uintptr_t* src_v_tbl_ptr = IsMLA || !src_v_layers.defined() ? nullptr : src_v_layers.data_ptr<uintptr_t>();
