@@ -731,7 +731,7 @@ class Indexer(MultiPlatformOp):
                     seqlens_32, blocksize, self.sm_count
                 )
         elif _is_dcu: #nhb
-             schedule_metadata = gemmopt.get_paged_mqa_logits_metadata(seqlens_32, blocksize, self.sm_count)
+             schedule_metadata = None
 
         assert len(weights.shape) == 3
         weights = weights.squeeze(2)
