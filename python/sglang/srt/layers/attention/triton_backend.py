@@ -776,6 +776,7 @@ class TritonAttnBackend(AttentionBackend):
                 window_num_kv_splits = self.cuda_graph_window_num_kv_splits
                 window_kv_indices = self.cuda_graph_window_kv_indices
                 window_kv_offsets = self.cuda_graph_window_kv_offsets
+                kv_last_index_cpu = int(seq_lens_cpu[:bs].clamp(max=self.sliding_window_size).sum()) if seq_lens_cpu is not None else None
                 _, _, window_kv_lens, window_kv_offsets[:bs] = (
                     update_sliding_window_buffer_cuda_graph(
                         self.window_kv_indptr,
@@ -786,6 +787,7 @@ class TritonAttnBackend(AttentionBackend):
                         req_pool_indices,
                         bs,
                         self.token_to_kv_pool_allocator,
+                        kv_last_index_cpu
                     )
                 )
             custom_mask = self.cuda_graph_custom_mask
@@ -836,16 +838,16 @@ class TritonAttnBackend(AttentionBackend):
                     (bs,), default_extend, dtype=torch.int32, device=seq_lens.device
                 )
 
-            qo_indptr = self.qo_indptr[: bs + 1]
-            qo_indptr[0] = 0
-            qo_indptr[1 : bs + 1] = torch.cumsum(extend_seq_lens, dim=0)
+            self.qo_indptr[: bs + 1] = torch.cat([
+                torch.zeros(1, dtype=extend_seq_lens.dtype, device=extend_seq_lens.device),
+                torch.cumsum(extend_seq_lens, dim=0)
+            ])
 
             # Handle sliding window attention for DRAFT_EXTEND_V2
             if self.sliding_window_size is not None and self.sliding_window_size > 0:
-                window_num_kv_splits = self.cuda_graph_window_num_kv_splits
                 window_kv_indices = self.cuda_graph_window_kv_indices
-                window_kv_offsets = self.cuda_graph_window_kv_offsets
-                _, _, window_kv_lens, window_kv_offsets[:bs] = (
+                kv_last_index_cpu = int(seq_lens_cpu[:bs].clamp(max=self.sliding_window_size).sum()) if seq_lens_cpu is not None else None
+                _, _, _, self.cuda_graph_window_kv_offsets[:bs] = (
                     update_sliding_window_buffer_cuda_graph(
                         self.window_kv_indptr,
                         window_kv_indices,
@@ -855,14 +857,10 @@ class TritonAttnBackend(AttentionBackend):
                         req_pool_indices,
                         bs,
                         self.token_to_kv_pool_allocator,
+                        kv_last_index_cpu
                     )
                 )
 
-            # Update max_extend_len for forward_extend
-            if extend_seq_lens_cpu:
-                self.forward_metadata.max_extend_len = int(max(extend_seq_lens_cpu))
-            else:
-                self.forward_metadata.max_extend_len = extend_seq_lens.max().item()
         else:
             raise ValueError(
                 f"Invalid forward mode: {forward_mode=} for CUDA Graph replay."
@@ -1473,11 +1471,9 @@ def update_sliding_window_buffer_cuda_graph(
     req_pool_indices,
     bs,
     token_to_kv_pool_allocator=None,
+    kv_last_index_cpu=None
 ):
-    window_kv_lens = torch.minimum(
-        seq_lens,
-        torch.tensor(sliding_window_size),
-    )
+    window_kv_lens = seq_lens.clamp(max=sliding_window_size)
     window_kv_indptr[1 : bs + 1] = torch.cumsum(window_kv_lens, dim=0)
     window_kv_indptr = window_kv_indptr[: bs + 1]
     window_kv_start_idx = seq_lens - window_kv_lens
@@ -1492,7 +1488,7 @@ def update_sliding_window_buffer_cuda_graph(
     )
     # full to swa index mapping
     if hasattr(token_to_kv_pool_allocator, "translate_loc_from_full_to_swa"):
-        kv_last_index = window_kv_indptr[-1]
+        kv_last_index = kv_last_index_cpu if kv_last_index_cpu is not None else window_kv_indptr[-1]
         window_kv_indices[:kv_last_index] = (
             token_to_kv_pool_allocator.translate_loc_from_full_to_swa(
                 window_kv_indices[:kv_last_index]
