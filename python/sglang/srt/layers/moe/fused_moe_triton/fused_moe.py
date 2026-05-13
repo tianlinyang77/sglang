@@ -67,6 +67,7 @@ elif _is_hip:
             raise ImportError("aiter is required when SGLANG_USE_AITER is set to True")
     if _use_aiter_moe:
         try:
+            import aiter
             from aiter.moe import (
                 get_aiter_moe_config,
                 aiter_moe,
@@ -982,6 +983,117 @@ def fused_moe(
         block_shape=block_shape,
     )
 
+def fused_aiter_moe_fp8_w8a8(
+    hidden_states: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    topk_weights: torch.Tensor,
+    topk_ids: torch.Tensor,
+    inplace: bool = False,
+    activation: int = 0,  # 0=silu, 1=gelu
+    w1_scale: Optional[torch.Tensor] = None,
+    w2_scale: Optional[torch.Tensor] = None,
+    origin_w1_shape: Optional[tuple] = None,
+    origin_w2_shape: Optional[tuple] = None,
+    w1_zp: Optional[torch.Tensor] = None,
+    w2_zp: Optional[torch.Tensor] = None,
+    a1_scale: Optional[torch.Tensor] = None,
+    a2_scale: Optional[torch.Tensor] = None,
+    block_shape: Optional[List[int]] = None,
+    routed_scaling_factor: Optional[float] = None,
+):
+    """
+    FP8 W8A8 fused MoE forward.
+
+    Args:
+        hidden_states: [M, K]
+        w1: expert gate/up weight
+        w2: expert down weight
+        topk_weights: routing weights
+        topk_ids: routing expert ids
+    """
+
+    # ------------------------------------------------------------------
+    # Shape parse
+    # ------------------------------------------------------------------
+    if origin_w1_shape is None or origin_w2_shape is None:
+        raise ValueError("origin_w1_shape and origin_w2_shape must not be None")
+
+    M, K = hidden_states.shape
+    E = w1.shape[0]
+    top_k = topk_ids.shape[1]
+
+    N1 = origin_w1_shape[1]
+    N2 = origin_w2_shape[1]
+
+    # ------------------------------------------------------------------
+    # Query backend config
+    # ------------------------------------------------------------------
+    status, moe_cfg = get_aiter_moe_config(
+        M=M,
+        E=E,
+        N1=N1,
+        N2=N2,
+        K=K,
+        top_k=top_k,
+        block_size=0,
+        dtype=hidden_states.dtype,
+        quant_type=MoeQuantType.FP8_W8A8,
+    )
+
+    # ------------------------------------------------------------------
+    # Backend unavailable
+    # ------------------------------------------------------------------
+    if not status:
+        aiter.logger.info(
+            "[aiter_moe_fp8_w8a8] skip: "
+            f"M={M}, N1={N1}, N2={N2}, K={K}, "
+            f"E={E}, topk={top_k}, "
+            "failed to find a suitable backend in aiter moe"
+        )
+
+    # ------------------------------------------------------------------
+    # Config validation
+    # ------------------------------------------------------------------
+    if moe_cfg.solution_type not in {
+        MoeSolutionType.MOE_C,
+        MoeSolutionType.ASM,
+        MoeSolutionType.TRITON,
+        MoeSolutionType.CK,
+    }:
+        raise RuntimeError(
+            f"Unsupported solution_type: {moe_cfg.solution_type}"
+        )
+
+    if moe_cfg.quant_type != MoeQuantType.FP8_W8A8:
+        raise RuntimeError(
+            f"Unexpected quant_type: {moe_cfg.quant_type}"
+        )
+
+    # ------------------------------------------------------------------
+    # Launch moe kernel
+    # ------------------------------------------------------------------
+    return aiter_moe(
+        hidden_states=hidden_states,
+        w1=w1,
+        w2=w2,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+        moe_cfg=moe_cfg,
+        inplace=inplace,
+        activation=activation,
+        w1_scale=w1_scale,
+        w2_scale=w2_scale,
+        w1_zp=w1_zp,
+        w2_zp=w2_zp,
+        a1_scale=a1_scale,
+        a2_scale=a2_scale,
+        block_shape=block_shape,
+        expert_num=E,
+        expert_mask=None,
+        routed_scaling_factor=routed_scaling_factor,
+    )
+
 
 @triton.jit
 def _per_token_quant_fp8(
@@ -1037,7 +1149,6 @@ def per_token_quant_fp8(x):
         fp8_max=fp8_max
     )
     return x_q, scales
-
 
 def fused_moe_fp8_w8a8(
     hidden_states: torch.Tensor,
@@ -1125,71 +1236,80 @@ def fused_moe_fp8_w8a8(
         hidden_states.dtype,
     )
 
-    block_size_m = cuda_config1["BLOCK_SIZE_M"]
+    if "BLOCK_SIZE_M" in cuda_config1:
+        block_size_m = cuda_config1["BLOCK_SIZE_M"]
 
-    if global_num_experts == -1:
-        global_num_experts = E
+        if global_num_experts == -1:
+            global_num_experts = E
 
-    sorted_token_ids, expert_ids, num_tokens_post_padded = dcu_moe_align_block_size(
-        topk_ids, block_size_m, global_num_experts)
+        sorted_token_ids, expert_ids, num_tokens_post_padded = dcu_moe_align_block_size(
+            topk_ids, block_size_m, global_num_experts)
 
-    # TODO: tune this further for specific models
-    # intermediate_cache2 = torch.empty(
-    #     (m * topk_ids.shape[1], n1 // 2),
-    #     device=hidden_states.device,
-    #     dtype=hidden_states.dtype,
-    # )
-    intermediate_cache13 = torch.empty(
-        (m * topk_ids.shape[1] * max(n1, k),),
-        device=hidden_states.device,
-        dtype=hidden_states.dtype,
-    )
-    intermediate_cache1 = intermediate_cache13[:m * topk_ids.shape[1] * n1]
-    intermediate_cache1 = intermediate_cache1.view(-1, n1)
-    intermediate_cache3 = intermediate_cache13[:m * topk_ids.shape[1] * k]
-    intermediate_cache3 = intermediate_cache3.view(-1, k)
+        # TODO: tune this further for specific models
+        # intermediate_cache2 = torch.empty(
+        #     (m * topk_ids.shape[1], n1 // 2),
+        #     device=hidden_states.device,
+        #     dtype=hidden_states.dtype,
+        # )
+        intermediate_cache13 = torch.empty(
+            (m * topk_ids.shape[1] * max(n1, k),),
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
+        intermediate_cache1 = intermediate_cache13[:m * topk_ids.shape[1] * n1]
+        intermediate_cache1 = intermediate_cache1.view(-1, n1)
+        intermediate_cache3 = intermediate_cache13[:m * topk_ids.shape[1] * k]
+        intermediate_cache3 = intermediate_cache3.view(-1, k)
 
-    intermediate_cache1 = moe_gemm_marlin_w8a8_fp8(
-        hidden_states_fp8,
-        w1,
-        intermediate_cache1,
-        hidden_states_scale_fp8,
-        w1_scale,
-        None,
-        sorted_token_ids,
-        expert_ids,
-        num_tokens_post_padded,
-        topk,
-        cuda_config1,
-    )
+        intermediate_cache1 = moe_gemm_marlin_w8a8_fp8(
+            hidden_states_fp8,
+            w1,
+            intermediate_cache1,
+            hidden_states_scale_fp8,
+            w1_scale,
+            None,
+            sorted_token_ids,
+            expert_ids,
+            num_tokens_post_padded,
+            topk,
+            cuda_config1,
+        )
 
-    fp8_cache2, fp8_cache2_scale = fuse_silu_mul_fp8_quant(intermediate_cache1, fp8type=0)
+        fp8_cache2, fp8_cache2_scale = fuse_silu_mul_fp8_quant(intermediate_cache1, fp8type=0)
 
-    intermediate_cache3 = moe_gemm_marlin_w8a8_fp8(
-        fp8_cache2,
-        w2,
-        intermediate_cache3,
-        fp8_cache2_scale,
-        w2_scale,
-        topk_weights,
-        sorted_token_ids,
-        expert_ids,
-        num_tokens_post_padded,
-        1,
-        cuda_config2,
-    ).view(-1, topk, k)
-    output = hidden_states if inplace else torch.empty_like(hidden_states)
+        intermediate_cache3 = moe_gemm_marlin_w8a8_fp8(
+            fp8_cache2,
+            w2,
+            intermediate_cache3,
+            fp8_cache2_scale,
+            w2_scale,
+            topk_weights,
+            sorted_token_ids,
+            expert_ids,
+            num_tokens_post_padded,
+            1,
+            cuda_config2,
+        ).view(-1, topk, k)
+        output = hidden_states if inplace else torch.empty_like(hidden_states)
 
-    if routed_scaling_factor is None:
-        routed_scaling_factor = 1.0
+        if routed_scaling_factor is None:
+            routed_scaling_factor = 1.0
 
-    ops.moe_sum(
-        intermediate_cache3,
-        output,
-        bias=bias,
-        expert_mask=None,
-        num_local_tokens=None,
-        factor=routed_scaling_factor,
-        expect_m=-1,
-    )
-    return output
+        ops.moe_sum(
+            intermediate_cache3,
+            output,
+            bias=bias,
+            expert_mask=None,
+            num_local_tokens=None,
+            factor=routed_scaling_factor,
+            expect_m=-1,
+        )
+        return output
+    elif "BLOCK_SIZE_M" not in cuda_config1 and _use_aiter_moe:
+        if routed_scaling_factor is None:
+            routed_scaling_factor = 1.0
+        return fused_aiter_moe_fp8_w8a8(hidden_states,origin_w1_shape=origin_w1_shape,origin_w2_shape=origin_w1_shape,w1=w1, w2=w2, topk_weights=topk_weights,\
+                topk_ids=topk_ids, inplace=inplace, activation=0, w1_scale=w1_scale, w2_scale=w2_scale, w1_zp=w1_zeros,\
+                      w2_zp=w2_zeros, a1_scale=None, a2_scale=None, routed_scaling_factor=routed_scaling_factor)
+    else:
+        raise RuntimeError("No MoE implementation available. Please set: export SGLANG_ROCM_USE_AITER_MOE=true")
