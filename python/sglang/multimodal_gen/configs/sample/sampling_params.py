@@ -163,6 +163,7 @@ class SamplingParams:
     # Profiling
     profile: bool = False
     num_profiled_timesteps: int = 5
+    profile_start_step: int = 0
     profile_all_stages: bool = False
 
     # Debugging
@@ -621,6 +622,13 @@ class SamplingParams:
             "--num-profiled-timesteps",
             type=int,
             help="Number of timesteps to profile after warmup",
+        )
+        add_argument(
+            "--profile-start-step",
+            type=int,
+            dest="profile_start_step",
+            help="Step index at which to start profiling (default: 0). "
+            "The warmup step runs at this index, actual profiling starts one step later.",
         )
         add_argument(
             "--profile-all-stages",

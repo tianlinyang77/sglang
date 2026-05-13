@@ -26,7 +26,6 @@ from sglang.multimodal_gen.runtime.layers.attention.selector import get_attn_bac
 from sglang.multimodal_gen.runtime.layers.usp import (
     _usp_input_all_to_all,
     _usp_output_all_to_all,
-    ring_attn,
 )
 from sglang.multimodal_gen.runtime.managers.forward_context import (
     ForwardContext,
@@ -35,6 +34,11 @@ from sglang.multimodal_gen.runtime.managers.forward_context import (
 from sglang.multimodal_gen.runtime.platforms import AttentionBackendEnum
 from sglang.multimodal_gen.utils import get_compute_dtype
 
+import sglang.multimodal_gen.envs as envs
+if envs.SGLANG_DIFFUSION_RING_ATTN_OVERLAP:
+    from sglang.multimodal_gen.runtime.layers.usp import ring_attn_overlap as ring_attn
+else:
+    from sglang.multimodal_gen.runtime.layers.usp import ring_attn
 
 class UlyssesAttention(nn.Module):
     """Ulysses-style SequenceParallelism attention layer."""
