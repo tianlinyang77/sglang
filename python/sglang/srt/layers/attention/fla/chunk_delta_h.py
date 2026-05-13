@@ -341,7 +341,7 @@ def chunk_gated_delta_rule_fwd_h(
             num_stages=2,
         )
     else:
-        from aiter.ops.triton.fla.chunk_delta_h import (
+        from aiter.ops.triton.fla.sglang.chunk_delta_h import (
             chunk_gated_delta_rule_fwd_kernel_h_blockdim64 as aiter_chunk_gated_delta_rule_fwd_kernel_h_blockdim64,
             _get_chunk_delta_h_config,
         )
