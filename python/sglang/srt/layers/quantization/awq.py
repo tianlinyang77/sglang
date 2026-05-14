@@ -49,12 +49,13 @@ if TYPE_CHECKING:
         StandardDispatchOutput,
     )
 
-from sglang.srt.utils import is_cuda, is_hip, is_npu, is_xpu
+from sglang.srt.utils import is_cuda, is_hip, is_npu, is_xpu, is_dcu
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
 _is_xpu = is_xpu()
 _is_npu = is_npu()
+_is_dcu = is_dcu()
 
 if _is_npu:
     import torch_npu
@@ -137,7 +138,7 @@ class AWQConfig(QuantizationConfig):
         return "awq"
 
     def get_supported_act_dtypes(self) -> List[torch.dtype]:
-        return [torch.float16] if not _is_npu else [torch.float16, torch.bfloat16]
+        return [torch.float16] if not (_is_npu or _is_dcu) else [torch.float16, torch.bfloat16]
 
     @classmethod
     def get_min_capability(cls) -> int:
@@ -180,6 +181,26 @@ class AWQConfig(QuantizationConfig):
                 return AWQLinearAscendMethod(self)
             elif isinstance(layer, FusedMoE):
                 return AWQMoEAscendMethod(self)
+            return None
+        
+        if _is_dcu:
+            if isinstance(layer, LinearBase):
+                if is_layer_skipped_awq(prefix, self.modules_to_not_convert):
+                    return UnquantizedLinearMethod()
+                return AWQLinearMethod(self)
+            elif isinstance(layer, FusedMoE):
+                from sglang.srt.layers.quantization.moe_wna16 import MoeWNA16Config
+                moe_cfg: Dict[str, Any] = {
+                    "quant_method": "awq",
+                    "bits": self.weight_bits,
+                    "group_size": self.group_size,
+                    "zero_point": self.zero_point,
+                    "modules_to_not_convert": self.modules_to_not_convert,
+                    "lm_head": False,
+                }
+                return MoeWNA16Config.from_config(moe_cfg).get_quant_method(
+                    layer, prefix
+                )
             return None
 
         if isinstance(layer, LinearBase):

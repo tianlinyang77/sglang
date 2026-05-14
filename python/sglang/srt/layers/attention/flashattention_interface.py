@@ -8,11 +8,12 @@ from typing import Optional, Union
 from sglang.srt.utils import is_dcu
 
 import torch
-from sglang.srt.server_args import get_global_server_args
 
-_SERVER_ARGS = get_global_server_args()
-IS_SLIMQUANT_W4A8 = (_SERVER_ARGS.quantization == "slimquant_w4a8_marlin")
-IS_KVCACHE_FP8_E4M3 = (_SERVER_ARGS.kv_cache_dtype == "fp8_e4m3")
+_SERVER_ARGS = None
+IS_SLIMQUANT_W4A8 = None
+IS_KVCACHE_FP8_E4M3 = None
+
+
 def is_nmz_fp8(dtype: torch.dtype) -> bool:
     if is_dcu():
         props = torch.cuda.get_device_properties(0)
@@ -151,6 +152,14 @@ def flash_attn_varlen_func(
     ver=3,
 
 ):
+    global _SERVER_ARGS, IS_SLIMQUANT_W4A8, IS_KVCACHE_FP8_E4M3
+
+    if IS_KVCACHE_FP8_E4M3 is None:
+        from sglang.srt.server_args import get_global_server_args
+
+        _SERVER_ARGS = get_global_server_args()
+        IS_SLIMQUANT_W4A8 = (_SERVER_ARGS.quantization == "slimquant_w4a8_marlin")
+        IS_KVCACHE_FP8_E4M3 = (_SERVER_ARGS.kv_cache_dtype == "fp8_e4m3")
 
     if is_nmz_fp8(k.dtype) and not IS_SLIMQUANT_W4A8 and not IS_KVCACHE_FP8_E4M3:
         q_descale = torch.ones_like(k_descale)
