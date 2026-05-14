@@ -156,10 +156,15 @@ class DCUMLABackend(AttentionBackend):
         use_sglang_create_flashmla_kv_indices_triton = get_bool_env_var("SGLANG_CREATE_FLASHMLA_KV_INDICES_TRITON", default="true")
         bs = forward_batch.batch_size
         if forward_batch.forward_mode.is_decode_or_idle():
+            # Match forward_decode cache_seqlens (seq_lens + draft when spec enabled).
+            if self.num_draft_tokens:
+                seq_lens_cpu = forward_batch.seq_lens_cpu + self.num_draft_tokens
+                seq_lens_for_kv = forward_batch.seq_lens + self.num_draft_tokens
+            else:
+                seq_lens_cpu = forward_batch.seq_lens_cpu
+                seq_lens_for_kv = forward_batch.seq_lens
 
-            max_seqlen_pad = triton.cdiv(
-                forward_batch.seq_lens_cpu.max().item(), PAGE_SIZE
-            )
+            max_seqlen_pad = triton.cdiv(seq_lens_cpu.max().item(), PAGE_SIZE)
 
             block_kv_indices = torch.full(
                 (bs, max_seqlen_pad),
@@ -171,7 +176,7 @@ class DCUMLABackend(AttentionBackend):
                 dcu_create_flashmla_kv_indices(
                     req_to_token_ptr = self.req_to_token.to(torch.int32),
                     req_pool_indices_ptr = forward_batch.req_pool_indices.to(torch.int32),
-                    page_kernel_lens_ptr = forward_batch.seq_lens.to(torch.int32),
+                    page_kernel_lens_ptr = seq_lens_for_kv.to(torch.int32),
                     kv_start_idx = None,
                     kv_indices_ptr = block_kv_indices.to(torch.int32),
                     req_to_token_ptr_stride = self.req_to_token.stride(0),
@@ -182,13 +187,27 @@ class DCUMLABackend(AttentionBackend):
                 create_flashmla_kv_indices_triton[(bs,)](
                     self.req_to_token,
                     forward_batch.req_pool_indices,
-                    forward_batch.seq_lens,
+                    seq_lens_for_kv,
                     None,
                     block_kv_indices,
                     self.req_to_token.stride(0),
                     max_seqlen_pad,
                 )
-            if self.metadata_interface_arguments == 4:
+            if self.num_draft_tokens:
+                if self.metadata_interface_arguments == 4:
+                    mla_metadata, num_splits = get_mla_metadata(
+                        seq_lens_for_kv.to(torch.int32),
+                        self.num_draft_tokens * self.num_q_heads,
+                        1,
+                        self.num_q_heads,
+                    )
+                else:
+                    mla_metadata, num_splits = get_mla_metadata(
+                        seq_lens_for_kv.to(torch.int32),
+                        self.num_draft_tokens * self.num_q_heads,
+                        1,
+                    )
+            elif self.metadata_interface_arguments == 4:
                 mla_metadata, num_splits = get_mla_metadata(
                     forward_batch.seq_lens.to(torch.int32),
                     self.num_q_heads,
@@ -381,12 +400,15 @@ class DCUMLABackend(AttentionBackend):
     ):
         use_sglang_create_flashmla_kv_indices_triton = get_bool_env_var("SGLANG_CREATE_FLASHMLA_KV_INDICES_TRITON", default="true")
         if forward_mode.is_decode_or_idle():
-            max_seqlen_pad = triton.cdiv(seq_lens.max().item(), PAGE_SIZE)
+            seq_lens_for_kv = (
+                seq_lens + self.num_draft_tokens if self.num_draft_tokens else seq_lens
+            )
+            max_seqlen_pad = triton.cdiv(seq_lens_for_kv.max().item(), PAGE_SIZE)
             if use_sglang_create_flashmla_kv_indices_triton:
                         dcu_create_flashmla_kv_indices(
                             req_to_token_ptr = self.req_to_token.to(torch.int32),
                             req_pool_indices_ptr = req_pool_indices.to(torch.int32),
-                            page_kernel_lens_ptr = seq_lens.to(torch.int32),
+                            page_kernel_lens_ptr = seq_lens_for_kv.to(torch.int32),
                             kv_start_idx = None,
                             kv_indices_ptr = self.cuda_graph_kv_indices.to(torch.int32),
                             req_to_token_ptr_stride =  self.req_to_token.stride(0),
@@ -397,7 +419,7 @@ class DCUMLABackend(AttentionBackend):
                 create_flashmla_kv_indices_triton[(bs,)](
                     self.req_to_token,
                     req_pool_indices,
-                    seq_lens,
+                    seq_lens_for_kv,
                     None,
                     self.cuda_graph_kv_indices,
                     self.req_to_token.stride(0),
@@ -406,11 +428,11 @@ class DCUMLABackend(AttentionBackend):
             num_q_heads = self.num_q_heads * (self.num_draft_tokens or 1)
             if self.metadata_interface_arguments == 4:
                 mla_metadata, num_splits = get_mla_metadata(
-                    seq_lens.to(torch.int32), num_q_heads, 1, self.num_q_heads,
+                    seq_lens_for_kv.to(torch.int32), num_q_heads, 1, self.num_q_heads,
                 )
             else:
                 mla_metadata, num_splits = get_mla_metadata(
-                    seq_lens.to(torch.int32), num_q_heads, 1,
+                    seq_lens_for_kv.to(torch.int32), num_q_heads, 1,
                 )
             self.cuda_graph_mla_metadata.copy_(mla_metadata)
             self.cuda_graph_num_splits[: bs + 1].copy_(num_splits)
@@ -487,6 +509,9 @@ class DCUMLABackend(AttentionBackend):
             assert seq_lens_cpu is not None
             seq_lens = seq_lens[:bs]
             seq_lens_cpu = seq_lens_cpu[:bs]
+            if self.num_draft_tokens:
+                seq_lens = seq_lens + self.num_draft_tokens
+                seq_lens_cpu = seq_lens_cpu + self.num_draft_tokens
             max_seqlen_pad = triton.cdiv(seq_lens_cpu.max().item(), PAGE_SIZE)
             if use_sglang_create_flashmla_kv_indices_triton:
                         dcu_create_flashmla_kv_indices(
