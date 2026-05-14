@@ -357,7 +357,7 @@ def chunk_gated_delta_rule_fwd_h(
             h=h,
             h0=initial_state,
             initial_state_indices=initial_state_indices,
-            ht=None,
+            ht=initial_state,#initial_state
             cu_seqlens=cu_seqlens,
             chunk_offsets=chunk_offsets,
             T=T,
