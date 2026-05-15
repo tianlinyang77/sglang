@@ -39,7 +39,15 @@ _is_hip = is_hip()
 _is_dcu = is_dcu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _use_fp8_w8a8_moe = get_bool_env_var("SGLANG_USE_FP8_W8A8_MOE")
-
+_use_aiter_fp8_w8a8_moe = get_bool_env_var("SGLANG_ROCM_USE_AITER_MOE")
+if _use_aiter_fp8_w8a8_moe:
+    import aiter
+    from aiter.moe import (
+        get_aiter_moe_config,
+        aiter_moe,
+        MoeSolutionType,
+        MoeQuantType,
+            )
 if _use_aiter and not _is_dcu:
     from aiter import ActivationType, QuantType
     from aiter.fused_moe import fused_moe
@@ -526,6 +534,96 @@ class CompressedTensorsW8A8Fp8MoE(CompressedTensorsMoEScheme):
                     hidden_states_scale_fp8_input=i_s if use_prequant_input else None,
                 )
                 return StandardCombineInput(hidden_states=output)
+        elif  _is_dcu and not _use_fp8_w8a8_moe and _use_aiter_fp8_w8a8_moe:
+            if isinstance(layer.w13_weight,tuple):
+                w1=layer.w13_weight[0]
+                w2=layer.w2_weight[0]
+            else:
+                w1=layer.w13_weight
+                w2=layer.w2_weight
+            topk_weights, topk_ids, _ = topk_output
+            if moe_runner_config.apply_router_weight_on_input:
+                assert topk_weights.dim() == 2, "`topk_weights` should be (num_tokens, topk)"
+                _, tk = topk_weights.shape
+                assert tk == 1, "DCU marlin path: apply_router_weight_on_input requires topk=1"
+                x = x * topk_weights.to(x.dtype)
+                topk_weights = torch.ones_like(topk_weights, dtype=torch.float32)
+                # Router-weighted input no longer matches precomputed rms-quant activations.
+                use_prequant_input = False
+            if isinstance(layer.w13_weight_scale, tuple):
+                w1_scale=layer.w13_weight_scale[0]
+                w2_scale=layer.w2_weight_scale[0]
+            else:
+                w1_scale=layer.w13_weight_scale
+                w2_scale=layer.w2_weight_scale
+            M, K = x.shape 
+            E = self.moe_runner_config.num_experts
+            top_k = topk_ids.shape[1]
+            N1 = w1.shape[1]
+            N2 = w2.shape[1]
+            activation="silu" if moe_runner_config.activation == "silu" else "gelu"
+            # -----------------------------------------------------------------
+            # Query backend config
+            # ------------------------------------------------------------------
+            status, moe_cfg = get_aiter_moe_config(
+                M=M,
+                E=E,
+                N1=N1,
+                N2=N2,
+                K=K,
+                top_k=top_k,
+                block_size=0,
+                dtype=x.dtype,
+                quant_type=MoeQuantType.FP8_W8A8,
+            )
+            if not status:
+                raise RuntimeError(
+                "[aiter_moe_fp8_w8a8] no suitable backend found: "
+                f"M={M}, N1={N1}, N2={N2}, K={K}, "
+                f"E={E}, topk={top_k}")
+            if moe_cfg.solution_type not in {
+                MoeSolutionType.MOE_C,
+                MoeSolutionType.ASM,
+                MoeSolutionType.TRITON,
+                MoeSolutionType.CK,
+            }:
+                raise RuntimeError(
+                    f"Unsupported solution_type: {moe_cfg.solution_type}"
+                )
+            # for debug：
+            # aiter.logger.info(f"moe_cfg.solution_type {moe_cfg.solution_type}")
+            #在 moe_c 后端需要对weight做shuffle，如果不做此 shuffle 直接传入 moe_c_fused_experts，
+            #底层 Marlin/CUDA kernel 会按错误的内存偏移读取权重，导致结果错误。
+            if moe_cfg.solution_type==MoeSolutionType.MOE_C:
+                from aiter.ops.shuffle import moe_layout_shuffle_gemm1,moe_layout_shuffle_gemm2
+                if not getattr(layer, "_moec_shuffled", False):
+                    layer.w13_weight.data = moe_layout_shuffle_gemm1(layer.w13_weight.data).view(*layer.w13_weight.data.shape)
+                    layer.w2_weight.data = moe_layout_shuffle_gemm2(layer.w2_weight.data).view(*layer.w2_weight.data.shape)
+                    layer._moec_shuffled = True
+                w1 = layer.w13_weight
+                w2 = layer.w2_weight
+            if moe_cfg.quant_type != MoeQuantType.FP8_W8A8:
+                raise RuntimeError(
+                    f"Unexpected quant_type: {moe_cfg.quant_type}"
+                )
+            if moe_runner_config.routed_scaling_factor is None:
+                moe_runner_config.routed_scaling_factor=1.0
+            output=aiter_moe(
+                hidden_states=x,
+                w1=w1,
+                w2=w2,
+                topk_weights=topk_weights,
+                topk_ids=topk_ids,
+                moe_config=moe_cfg,
+                inplace=True,
+                w1_scale=w1_scale,
+                w2_scale=w2_scale,
+                activation=activation,
+                block_shape=None,
+                global_num_experts=E,
+                routed_scaling_factor=moe_runner_config.routed_scaling_factor,
+            )
+            return StandardCombineInput(hidden_states=output)
         else:
             quant_info = TritonMoeQuantInfo(
                 w13_weight=layer.w13_weight,
