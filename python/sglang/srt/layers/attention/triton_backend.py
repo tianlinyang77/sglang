@@ -113,9 +113,12 @@ class TritonAttnBackend(AttentionBackend):
             if hasattr(model_runner.token_to_kv_pool, 'v_head_dim'):
                 self.v_head_dim = model_runner.token_to_kv_pool.v_head_dim #nhb
             elif hasattr(model_runner.token_to_kv_pool, 'get_value_buffer'):
-                self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[
-                    -1
-                ]
+                try:
+                    self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[-1]
+                except KeyError:
+                    # PP mode: layer 0 may not exist on this stage
+                    self.v_head_dim = getattr(model_runner.token_to_kv_pool, 'v_head_dim', None) or \
+                        model_runner.token_to_kv_pool.full_kv_pool.v_head_dim
 
         self.max_context_len = model_runner.model_config.context_len
         self.device = model_runner.device

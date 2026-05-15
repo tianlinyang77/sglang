@@ -77,6 +77,8 @@ class SlimQuantCompressedTensorsMarlinConfig(CompressedTensorsConfig):
         from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE  # Avoid circular import
         from sglang.srt.layers.radix_attention import RadixAttention
         # Check if the layer is skipped for quantization.
+        if isinstance(layer, RadixAttention):
+            return CompressedTensorsKVCacheMethod(self)
         if should_ignore_layer(prefix,
                                ignore=self.ignore,
                                fused_mapping=self.packed_modules_mapping):
@@ -87,8 +89,6 @@ class SlimQuantCompressedTensorsMarlinConfig(CompressedTensorsConfig):
                 return UnquantizedEmbeddingMethod()#UnquantizedLinearMethod()
             layer.scheme = scheme
             return CompressedTensorsLinearMethod(self)
-        if isinstance(layer, RadixAttention):
-            return CompressedTensorsKVCacheMethod(self)
         if isinstance(layer, FusedMoE):
             return CompressedTensorsMarlinMoEMethod.get_moe_method(self, layer)
         return None

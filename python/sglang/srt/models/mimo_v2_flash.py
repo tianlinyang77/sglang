@@ -1019,13 +1019,18 @@ class MiMoV2FlashForCausalLM(nn.Module):
         input_embeds: torch.Tensor = None,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
-        hidden_states, hidden_states_before_norm = self.model(
+        ouput = self.model(
             input_ids,
             positions,
             forward_batch,
             input_embeds,
             pp_proxy_tensors=pp_proxy_tensors,
         )
+        
+        if not self.pp_group.is_last_rank:
+            return ouput
+
+        hidden_states, hidden_states_before_norm = ouput
 
         if self.pp_group.is_last_rank:
             return self.logits_processor(

@@ -337,6 +337,8 @@ class SlimQuantW4A8Int8MarlinMoEMethod:
         self,
         layer: torch.nn.Module,
         dispatch_output,
+        i_q: Optional[torch.Tensor] = None,
+        i_s: Optional[torch.Tensor] = None,
        # local_expert_mapping,
     ) :
         from sglang.srt.layers.moe.token_dispatcher.standard import StandardCombineInput
