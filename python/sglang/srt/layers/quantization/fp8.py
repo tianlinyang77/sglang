@@ -1745,6 +1745,7 @@ class Fp8MoEMethod(FusedMoEMethodBase):
                             x.dtype,
                             False,
                             activation,
+                            None,
                             True,
                             False,
                             False,
