@@ -501,7 +501,6 @@ class RadixCache(BasePrefixCache):
                 kv_indices[req.cache_protected_len : new_prefix_len]
             )
         else:
-            logger.info(f"insert free")
             self.token_to_kv_pool_allocator.free(
                 kv_indices[req.cache_protected_len : len(keys)]
             )

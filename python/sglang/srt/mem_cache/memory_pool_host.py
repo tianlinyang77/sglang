@@ -118,12 +118,10 @@ def alloc_with_host_register(
     CudaHostRegister only applies when pin_memory=True.
     """
     buffer = allocator.allocate(dims, dtype=dtype, device=device)
-    logger.info(f"pin_memory:{pin_memory}")
     if pin_memory:
         err = torch.cuda.cudart().cudaHostRegister(
             buffer.data_ptr(), buffer.numel() * buffer.element_size(), 0
         )
-        logger.info(f"err:{err}")
     return buffer
 
 
@@ -506,7 +504,6 @@ class MHATokenToKVPoolHost(HostKVCache):
                         element_size=self.element_dim * self.dtype.itemsize,
                     )
                 else:
-                    # logger.info(f"layer_first device_pool.k_data_ptrs:{device_pool.k_data_ptrs},self.k_data_ptrs:{self.k_data_ptrs},device_pool.v_data_ptrs:{device_pool.v_data_ptrs},self.v_data_ptrs:{self.v_data_ptrs},device_indices:{device_indices},host_indices:{host_indices}")
                     transfer_kv_all_layer(
                         src_k_layers=device_pool.k_data_ptrs,
                         dst_k_layers=self.k_data_ptrs,
@@ -702,7 +699,6 @@ class MHATokenToKVPoolHost(HostKVCache):
             * self.dtype.itemsize
         )
         if self.layout == "layer_first":
-            logger.info(f"len(indices):{len(indices)},page_size:{self.page_size},self.layer_num:{self.layer_num}")
             for index in range(0, len(indices), self.page_size):
                 for layer_id in range(self.layer_num):
                     k_ptr = (
@@ -903,7 +899,6 @@ class MHATokenToKVPoolHostDCU(HostKVCache):
             else:
                 raise ValueError(f"DCU HiCache Unsupported layout: {self.layout}")
         elif io_backend == "direct":
-            # logger.info(f"device_indices:{device_indices},host_indices:{host_indices}")
             if self.layout == "layout_dcu":
                 transfer_kv_all_direct_lf_pf_D2H_dcu(
                     src_ptrs_k=device_pool.k_buffer,
@@ -2376,7 +2371,6 @@ class NSATokenToKVPoolHost(MLATokenToKVPoolHost):
                     item_size=self.indexer_page_stride_size,
                 )
             elif self.layout == "page_first":
-                logger.info(f"NSATokenToKVPoolHost _load_indexer_to_device_per_layer")
                 transfer_kv_per_layer_mla_pf_lf(
                     src=self.index_k_with_scale_buffer,
                     dst=device_pool.index_k_with_scale_buffer[layer_id],

@@ -500,7 +500,6 @@ class MooncakeStore(HiCacheStorage, MooncakeBaseStore):
         # if _kv_layout_dcu_fa:
         #     buffer = self.mem_pool_host.kv_buffer[0]
         # else:    
-        buffer = self.mem_pool_host.kv_buffer
         try:
             super().register_buffer(buffer)
         except TypeError as err:

@@ -691,15 +691,8 @@ class HiCacheController:
         finish_event = device_module.Event()
 
         start_event.record()
-        # current_stream = device_module.current_stream()
         with device_module.stream(self.write_stream):
             start_event.wait(self.write_stream)
-            # Ensure write_stream waits for both schedule and forward streams
-            # before reading KV data for D2H transfer.
-            # self.write_stream.wait_stream(current_stream)
-            # if self.producer_stream is not None:
-            #     self.write_stream.wait_stream(self.producer_stream)
-            # start_event.record()
             self.mem_pool_host.backup_from_device_all_layer(
                 self.mem_pool_device, host_indices, device_indices, self.io_backend
             )
@@ -712,9 +705,6 @@ class HiCacheController:
             if device_indices.is_cuda:
                 device_indices.record_stream(self.write_stream)
 
-        # Expose finish event so scheduler can fence forward_stream
-        # before the next forward kernel launch.
-        # self.last_write_finish_event = finish_event
 
         self.ack_write_queue.append(HiCacheAck(start_event, finish_event, op.node_ids))
 
@@ -759,10 +749,8 @@ class HiCacheController:
             raise ValueError(f"Unsupported io backend")
 
     def start_loading(self) -> int:
-        # logger.info(f"start_loading before")
         if len(self.load_queue) == 0:
             return -1
-        # logger.info(f"start_loading after")
         producer_id = self.layer_done_counter.update_producer()
         op = CacheOperation.merge_ops(self.load_queue)
         host_indices, device_indices = self.move_indices(op)

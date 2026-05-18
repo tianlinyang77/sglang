@@ -214,7 +214,6 @@ class BaseTpWorker(ABC):
         embeddings = logits_output.embeddings
         return embeddings
 
-stepnum=0
 class TpModelWorker(BaseTpWorker):
     """A tensor parallel model worker."""
 
@@ -459,13 +458,6 @@ class TpModelWorker(BaseTpWorker):
         #               which requires preparing replay to always be in this function
 
         # Get forward batch from model worker batch
-        # global stepnum 
-        # stepnum +=1
-        # logger.info(f"stepnum:{stepnum}")
-        # if stepnum == 1400:
-        #     profile.StartTracer()
-        # if stepnum == 1415:
-        #     profile.StopTracer()
         if model_worker_batch is not None:
             # update the consumer index of hicache to the running batch
             self.set_hicache_consumer(model_worker_batch.hicache_consumer_index)

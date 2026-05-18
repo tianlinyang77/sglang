@@ -2908,7 +2908,6 @@ class ServerArgs:
             return True
 
         # If decode backend is implicit, pick a safe backend without changing io backend.
-        # logger.info(f"self.use_mla_backend():{self.use_mla_backend()},is_flashinfer_available():{is_flashinfer_available()}")
         if not self.use_mla_backend():
             self.decode_attention_backend = (
                 "flashinfer" if is_flashinfer_available() else "triton"
