@@ -1102,7 +1102,6 @@ class HiRadixCache(RadixCache):
         """
         return self.cache_controller.start_loading()
 
-
     def flush_write_through_acks(self) -> None:
         self.writing_check()
 
@@ -1469,6 +1468,7 @@ class HiRadixCache(RadixCache):
         if priority is None:
             priority = 0
         key, value = self.maybe_bigram_convert(key, value)
+
         if len(key) == 0:
             return InsertResult(prefix_len=0)
        
@@ -1479,6 +1479,7 @@ class HiRadixCache(RadixCache):
         node = self.root_node
         child_key = self.get_child_key_fn(key)
         total_prefix_length = 0
+        
         while len(key) > 0 and child_key in node.children.keys():
             node = node.children[child_key]
             node.last_access_time = time.monotonic()

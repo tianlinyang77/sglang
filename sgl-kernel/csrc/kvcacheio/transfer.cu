@@ -449,13 +449,8 @@ __global__ void transfer_kernel_impl_dcu(
           static_cast<const char*>(src_k), src_k_layer_tbl, layer_id, src_layout_dim, s_page_id, item_size_bytes);
       char* dst_ptr = DstOffsetFn(
           static_cast<char*>(dst_k), dst_k_layer_tbl, layer_id, dst_layout_dim, d_page_id, item_size_bytes);
-      // if(page_index_id==0 && lane_id ==0 ){
-      //   printf("DEBUG src_ptr:%p,src_ptr:%lu,dst_ptr:%p,dst_ptr:%lu ,layer_id:%d,s_page_id:%d,d_page_id:%d,src_layout_dim:%d,dst_layout_dim:%d,item_size_bytes:%d,total_threads:%d,num_layers_to_process:%d begin\n",(void*)src_ptr,(uintptr_t)src_ptr,(void*)dst_ptr,(uintptr_t)dst_ptr,layer_id,s_page_id,d_page_id,src_layout_dim,dst_layout_dim,item_size_bytes,total_threads,num_layers_to_process);
-      // }
       transfer_item_warp_dcu(lane_id, src_ptr, dst_ptr, item_size_bytes,total_threads);
-      // if(page_index_id==0 && lane_id ==0 ){
-      //   printf("DEBUG src_ptr:%p,src_ptr:%lu,dst_ptr:%p,dst_ptr:%lu ,layer_id:%d,s_page_id:%d,d_page_id:%d,src_layout_dim:%d,dst_layout_dim:%d,item_size_bytes:%d finish\n",(void*)src_ptr,(uintptr_t)src_ptr,(void*)dst_ptr,(uintptr_t)dst_ptr,layer_id,s_page_id,d_page_id,src_layout_dim,dst_layout_dim,item_size_bytes);
-      // }
+
       const char* src_v_ptr = SrcOffsetFn(
           static_cast<const char*>(src_v), src_v_layer_tbl, layer_id, src_layout_dim, s_page_id, item_size_bytes);
       char* dst_v_ptr = DstOffsetFn(
@@ -614,8 +609,7 @@ void transfer_kv_launcher_dcu(
   const uintptr_t* src_v_tbl_ptr = !src_v_layers.defined() ? nullptr : src_v_layers.data_ptr<uintptr_t>();
   const uintptr_t* dst_v_tbl_ptr = !dst_v_layers.defined() ? nullptr : dst_v_layers.data_ptr<uintptr_t>();
 
-  cudaStream_t torch_current_stream = at::cuda::getCurrentCUDAStream();
-  // printf("transfer_kv_launcher_dcu!!!\n");   
+  cudaStream_t torch_current_stream = at::cuda::getCurrentCUDAStream();   
   transfer_kernel_impl_dcu<SrcOffsetFn, DstOffsetFn><<<grid_dim, threads_per_block, 0, torch_current_stream>>>(
       src_k_ptr,
       dst_k_ptr,
@@ -1041,7 +1035,6 @@ inline void transfer_kv_page_first_direct_impl(
   const int64_t num_pages = src_indices_cpu.size(0) / page_size;
   int64_t* src_indices_ptr = src_indices_cpu.data_ptr<int64_t>();
   int64_t* dst_indices_ptr = dst_indices_cpu.data_ptr<int64_t>();
-  printf("!!!!!src_ptrs size:%ld,dst_ptrs size:%ld \n",src_ptrs.size(),dst_ptrs.size());
   auto fallback_to_page_copy = [&]() {
     if constexpr (IsLf2Pf) {
       const bool is_mla = dst_ptrs.size() == 1;
@@ -1066,7 +1059,6 @@ inline void transfer_kv_page_first_direct_impl(
     } else {
       const bool is_mla = src_ptrs.size() == 1;
       const int64_t num_layers = is_mla ? dst_ptrs.size() : dst_ptrs.size() / 2;
-      printf("$$$size:%ld,num_layers:%ld,dst_ptrs.size():%ld \n",src_ptrs.size(),num_layers,dst_ptrs.size());
       for (const auto i : c10::irange(num_pages)) {
         const int64_t s_index = src_indices_ptr[i * page_size] / page_size;
         const int64_t d_index = dst_indices_ptr[i * page_size];
@@ -1087,9 +1079,7 @@ inline void transfer_kv_page_first_direct_impl(
   };
 
 #if defined(USE_ROCM) || !defined(CUDA_VERSION) || CUDA_VERSION < 12080
-  printf("33333333333333333\n");
   fallback_to_page_copy();
-  printf("4444444444444444444\n");
   return;
 
 #else

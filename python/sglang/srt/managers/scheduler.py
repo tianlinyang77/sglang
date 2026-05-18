@@ -751,6 +751,7 @@ class Scheduler(
 
                 self.tree_cache = SWAChunkCache(params)
         else:
+
             if envs.SGLANG_EXPERIMENTAL_CPP_RADIX_TREE.get():
                 # lazy import to avoid JIT overhead
                 from sglang.srt.mem_cache.radix_cache_cpp import RadixCacheCpp
@@ -762,11 +763,13 @@ class Scheduler(
                     from sglang.srt.mem_cache.hi_mamba_radix_cache import (
                         HiMambaRadixCache,
                     )
+                    
                     self.tree_cache = HiMambaRadixCache(
                         params=params, server_args=server_args
                     )
                 else:
                     from sglang.srt.mem_cache.hiradix_cache import HiRadixCache
+
                     self.tree_cache = HiRadixCache(
                         params=params, server_args=server_args
                     )

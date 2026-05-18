@@ -2899,6 +2899,7 @@ class ServerArgs:
         )
         if effective_decode_backend != "fa3":
             return False
+        
         if self.decode_attention_backend is not None:
             self.hicache_io_backend = "direct"
             logger.warning(

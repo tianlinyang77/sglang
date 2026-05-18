@@ -705,7 +705,6 @@ class HiCacheController:
             if device_indices.is_cuda:
                 device_indices.record_stream(self.write_stream)
 
-
         self.ack_write_queue.append(HiCacheAck(start_event, finish_event, op.node_ids))
 
     def load(
@@ -751,6 +750,7 @@ class HiCacheController:
     def start_loading(self) -> int:
         if len(self.load_queue) == 0:
             return -1
+        
         producer_id = self.layer_done_counter.update_producer()
         op = CacheOperation.merge_ops(self.load_queue)
         host_indices, device_indices = self.move_indices(op)

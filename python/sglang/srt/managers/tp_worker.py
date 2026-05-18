@@ -214,6 +214,7 @@ class BaseTpWorker(ABC):
         embeddings = logits_output.embeddings
         return embeddings
 
+
 class TpModelWorker(BaseTpWorker):
     """A tensor parallel model worker."""
 

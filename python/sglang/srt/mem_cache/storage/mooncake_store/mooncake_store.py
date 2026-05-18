@@ -496,10 +496,7 @@ class MooncakeStore(HiCacheStorage, MooncakeBaseStore):
             "page_head",
             "layout_dcu",
         ], "mooncake store storage backend only support page first or page first direct layout"
-        buffer = self.mem_pool_host.kv_buffer
-        # if _kv_layout_dcu_fa:
-        #     buffer = self.mem_pool_host.kv_buffer[0]
-        # else:    
+        buffer = self.mem_pool_host.kv_buffer  
         try:
             super().register_buffer(buffer)
         except TypeError as err:
@@ -525,13 +522,10 @@ class MooncakeStore(HiCacheStorage, MooncakeBaseStore):
 
     def _get_mha_buffer_meta(self, keys, indices):
         ptr_list, element_size_list = self.mem_pool_host.get_page_buffer_meta(indices)
-        # logger.info(f"ptr_list.len:{len(ptr_list)},ptr_list:{ptr_list}")
-        # logger.info(f"keys.len:{len(keys)},keys:{keys}")
         key_list = []
         for key_ in keys:
             key_list.append(f"{key_}_{self.mha_suffix}_k")
             key_list.append(f"{key_}_{self.mha_suffix}_v")
-        # assert len(key_list) == len(ptr_list)
         return key_list, ptr_list, element_size_list
 
     def _get_mla_buffer_meta(self, keys, indices):

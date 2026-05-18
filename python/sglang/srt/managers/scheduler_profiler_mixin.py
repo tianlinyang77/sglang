@@ -142,7 +142,6 @@ class SchedulerProfilerMixin:
 
         if sglang_enable_hipprof:
             profile.StartTracer()
-            logger.info("hipprof start##########")
             return 
 
         if envs.SGLANG_PROFILE_V2.get():
@@ -261,7 +260,6 @@ class SchedulerProfilerMixin:
 
         if sglang_enable_hipprof:
             profile.StopTracer()
-            logger.info("hipprof stop#############")
             return 
 
 
