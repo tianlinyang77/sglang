@@ -69,7 +69,6 @@ class HiRadixCache(RadixCache):
         if isinstance(self.kv_cache, MHATokenToKVPool):
             logger.info(f"_kv_layout_dcu_fa:{_kv_layout_dcu_fa}")
             if _kv_layout_dcu_fa:
-                logger.info(f"################")
                 self.token_to_kv_pool_host = MHATokenToKVPoolHostDCU(
                     self.kv_cache,
                     server_args.hicache_ratio,
@@ -546,7 +545,10 @@ class HiRadixCache(RadixCache):
                         if ext == ".json":
                             extra_config = json.load(f)
                         elif ext == ".toml":
-                            import tomllib
+                            try:
+                                import tomllib  # Python 3.11+
+                            except ImportError:
+                                import tomli as tomllib
 
                             extra_config = tomllib.load(f)
                         elif ext in (".yaml", ".yml"):

@@ -46,11 +46,10 @@ void* get_rocm_kernel_accessible_ptr(const at::Tensor& tensor) {
 #endif
 
 __device__ __forceinline__ void
-transfer_item_warp(int32_t lane_id, const void* src_addr, void* dst_addr, int64_t item_size_bytes,bool isk = true) {
+transfer_item_warp(int32_t lane_id, const void* src_addr, void* dst_addr, int64_t item_size_bytes) {
   const uint64_t* __restrict__ src = static_cast<const uint64_t*>(src_addr);
   uint64_t* __restrict__ dst = static_cast<uint64_t*>(dst_addr);
   const int total_chunks = item_size_bytes / sizeof(uint64_t);
-
 
 #pragma unroll
   for (int j = lane_id; j < total_chunks; j += WARP_SIZE) {
@@ -60,20 +59,67 @@ transfer_item_warp(int32_t lane_id, const void* src_addr, void* dst_addr, int64_
     asm volatile("st.global.cg.b64 [%0],%1;" ::"l"(dst + j), "l"(tmp) : "memory");
 
 #else
-    // printf("DEBUG __builtin_nontemporal_load\n");
     uint64_t tmp = __builtin_nontemporal_load(src + j);
-    // printf("DEBUG __builtin_nontemporal_load after\n");
     __builtin_nontemporal_store(tmp, dst + j);
-    // printf("__builtin_nontemporal_store after\n");
-    // printf("DEBUG tmp before\n");
-    // uint64_t tmp = src[j];  // 替代 ld.global.nc
-    // printf("DEBUG tmp:%llu,tmp:%llx\n", (unsigned long long)tmp,(unsigned long long)tmp);
-    // dst[j] = tmp; 
-    // printf("DEBUG tmp after\n");
 #endif
   }
 }
 
+__device__ __forceinline__ void
+transfer_item_warp_dcu(int32_t lane_id, const void* src_addr, void* dst_addr, int64_t item_size_bytes,int64_t total_threads) {
+  const uint64_t* __restrict__ src = static_cast<const uint64_t*>(src_addr);
+  uint64_t* __restrict__ dst = static_cast<uint64_t*>(dst_addr);
+  const int total_chunks = item_size_bytes / sizeof(uint64_t);
+
+#pragma unroll
+  for (int j = lane_id; j < total_chunks; j += total_threads) {
+#ifndef USE_ROCM
+    uint64_t tmp;
+    asm volatile("ld.global.nc.b64 %0,[%1];" : "=l"(tmp) : "l"(src + j) : "memory");
+    asm volatile("st.global.cg.b64 [%0],%1;" ::"l"(dst + j), "l"(tmp) : "memory");
+
+#else
+    uint64_t tmp = __builtin_nontemporal_load(src + j);
+    __builtin_nontemporal_store(tmp, dst + j);
+#endif
+  }
+}
+
+template <typename T>
+__device__ __forceinline__ T* get_global_offset_lf_tbl_dcu(
+    T* /*unused*/,
+    const uintptr_t* __restrict__ layer_base_tbl,
+    int64_t layer_id,
+    int64_t layer_dim,
+    int64_t page_id,
+    int64_t item_size_bytes) {
+  // layer first
+  return reinterpret_cast<T*>(layer_base_tbl[layer_id]) + page_id * item_size_bytes ;
+}
+
+template <typename T>
+__device__ __forceinline__ T* get_global_offset_pf_dcu(
+    T* base,
+    const uintptr_t* __restrict__ /*unused*/,
+    int64_t layer_id,
+    int64_t page_dim,
+    int64_t page_id,
+    int64_t item_size_bytes) {
+  // layer first
+  return base + page_id * page_dim + layer_id * item_size_bytes ;
+}
+
+template <typename T>
+__device__ __forceinline__ T* get_global_offset_lf_dcu(
+    T* base,
+    const uintptr_t* __restrict__ /*unused*/,
+    int64_t layer_id,
+    int64_t layer_dim,
+    int64_t page_id,
+    int64_t item_size_bytes) {
+  // layer first
+  return base + layer_id * layer_dim + page_id * item_size_bytes;
+}
 
 
 template <typename T>
@@ -235,228 +281,6 @@ __device__ __forceinline__ T* get_global_offset_pf_dcu_v(
     
 }
 
-
-template <auto SrcOffsetFn_K,auto SrcOffsetFn_V, auto DstOffsetFn_K,auto DstOffsetFn_V>
-__global__ void transfer_page_head_kernel_impl_dcu(
-    const void* __restrict__ src_k,
-    void* __restrict__ dst_k,
-    const void* __restrict__ src_v,
-    void* __restrict__ dst_v,
-    const int64_t* __restrict__ src_indices,
-    const int64_t* __restrict__ dst_indices,
-    int64_t start_layer_id,
-    int64_t num_layers_to_process,
-    int64_t num_items,
-    int64_t items_per_warp,
-    int64_t item_size_bytes,
-    int64_t src_layout_dim,
-    int64_t dst_layout_dim,
-    const uintptr_t* __restrict__ src_k_layer_tbl,
-    const uintptr_t* __restrict__ dst_k_layer_tbl,
-    const uintptr_t* __restrict__ src_v_layer_tbl,
-    const uintptr_t* __restrict__ dst_v_layer_tbl,
-    const int64_t page_size,
-    const int64_t head_num,
-    const int64_t v_head_dim) {
-  int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-  int32_t lane_id = tid % WARP_SIZE;
-  int32_t warp_id = tid / WARP_SIZE;
-  const int64_t head_size_bytes = item_size_bytes / head_num;
-  const int64_t size_bytes = item_size_bytes / head_num * v_head_dim;
-
-
-  for (int i = 0; i < items_per_warp; ++i) {
-    int64_t item_id = warp_id * items_per_warp + i;
-    if (item_id >= num_items) {
-      break;
-    }
-    const int64_t src_page_id = src_indices[item_id];
-    const int64_t dst_page_id = dst_indices[item_id];
-
-    // Loop over layers if necessary
-    for (int64_t layer_id = start_layer_id; layer_id < start_layer_id + num_layers_to_process; ++layer_id) {
-      // For page head layout, the cache of each head in the token is discontinuous, need to loop
-      for (int64_t head_id = 0; head_id < head_num; ++head_id) {
-        const char* src_k_ptr = SrcOffsetFn_K(
-            static_cast<const char*>(src_k),
-            src_k_layer_tbl,
-            layer_id,
-            src_layout_dim,
-            src_page_id,
-            item_size_bytes,
-            head_id,
-            head_num,
-            page_size);
-        char* dst_k_ptr = DstOffsetFn_K(
-            static_cast<char*>(dst_k),
-            dst_k_layer_tbl,
-            layer_id,
-            dst_layout_dim,
-            dst_page_id,
-            item_size_bytes,
-            head_id,
-            head_num,
-            page_size);
-        transfer_item_warp(lane_id, src_k_ptr, dst_k_ptr, head_size_bytes);
-
-        for(int64_t v_head_dim_id = 0; v_head_dim_id < v_head_dim; ++v_head_dim_id) {
-            const char* src_v_ptr = SrcOffsetFn_V(
-              static_cast<const char*>(src_v),
-              src_v_layer_tbl,
-              layer_id,
-              src_layout_dim,
-              src_page_id,
-              item_size_bytes,
-              head_id,
-              v_head_dim_id,
-              head_num,
-              page_size);
-            char* dst_v_ptr = DstOffsetFn_V(
-                static_cast<char*>(dst_v),
-                dst_v_layer_tbl, 
-                layer_id,
-                dst_layout_dim,
-                dst_page_id,
-                item_size_bytes,
-                head_id,
-                v_head_dim_id,
-                head_num,
-                page_size);
-          transfer_item_warp(lane_id, src_v_ptr, dst_v_ptr, size_bytes,false);
-        } 
-      }
-    }
-  }
-}
-
-template <auto SrcOffsetFn_K,auto SrcOffsetFn_V, auto DstOffsetFn_K,auto DstOffsetFn_V, bool IsMLA, bool PageHeadLayout = false>
-void transfer_kv_launcher_dcu(
-    const at::Tensor& src_k,
-    at::Tensor& dst_k,
-    const at::Tensor& src_v,
-    at::Tensor& dst_v,
-    const at::Tensor& src_indices,
-    const at::Tensor& dst_indices,
-    int64_t start_layer_id,
-    int64_t num_layers_to_process,
-    int64_t item_size,
-    int64_t src_layout_dim,
-    int64_t dst_layout_dim,
-    const at::Tensor& src_k_layers,
-    const at::Tensor& dst_k_layers,
-    const at::Tensor& src_v_layers,
-    const at::Tensor& dst_v_layers,
-    int64_t block_quota,
-    int64_t num_warps_per_block,
-    const int64_t page_size = 16,
-    const int64_t head_num = 1,
-    const int64_t v_head_dim = 1) {
-
-  TORCH_CHECK(src_indices.is_cuda(), "Source indices must be a CUDA tensor");
-  TORCH_CHECK(dst_indices.is_cuda(), "Destination indices must be a CUDA tensor");
-  TORCH_CHECK(src_indices.scalar_type() == at::kLong, "Source indices must be of type long");
-  TORCH_CHECK(dst_indices.scalar_type() == at::kLong, "Destination indices must be of type long");
-  TORCH_CHECK(src_indices.numel() == dst_indices.numel(), "Source and destination indices must have the same length");
-  TORCH_CHECK(item_size % 8 == 0, "Item byte size must be divisible by 8");
-
-  auto div_up = [](int64_t x, int64_t y) { return (x + y - 1) / y; };
-  const int64_t num_items = src_indices.numel();
-  const int64_t items_per_warp = div_up(num_items, block_quota * num_warps_per_block);
-  const int32_t num_blocks = div_up(num_items, items_per_warp * num_warps_per_block);
-  dim3 grid_dim(num_blocks, 1, 1);
-  const int32_t threads_per_block = num_warps_per_block * WARP_SIZE;
-
-  printf("DEBUG:num_items=%ld,items_per_warp=%ld,num_blocks=%ld, threads_per_block=%ld,block_quota=%ld,num_warps_per_block=%ld,WARP_SIZE=%ld\n",num_items,items_per_warp,num_blocks,threads_per_block,block_quota,num_warps_per_block,WARP_SIZE);
-
-  const void* src_k_ptr = src_k.defined() ? src_k.data_ptr() : nullptr;
-  void* dst_k_ptr = dst_k.defined() ? dst_k.data_ptr() : nullptr;
-  const void* src_v_ptr = IsMLA || !src_v.defined() ? nullptr : src_v.data_ptr();
-  void* dst_v_ptr = IsMLA || !dst_v.defined() ? nullptr : dst_v.data_ptr();
-#ifdef USE_ROCM
-  src_k_ptr = get_rocm_kernel_accessible_ptr(src_k);
-  dst_k_ptr = get_rocm_kernel_accessible_ptr(dst_k);
-  if constexpr (!IsMLA) {
-    src_v_ptr = get_rocm_kernel_accessible_ptr(src_v);
-    dst_v_ptr = get_rocm_kernel_accessible_ptr(dst_v);
-  }
-#endif
-  const uintptr_t* src_k_tbl_ptr = src_k_layers.defined() ? src_k_layers.data_ptr<uintptr_t>() : nullptr;
-  const uintptr_t* dst_k_tbl_ptr = dst_k_layers.defined() ? dst_k_layers.data_ptr<uintptr_t>() : nullptr;
-  const uintptr_t* src_v_tbl_ptr = IsMLA || !src_v_layers.defined() ? nullptr : src_v_layers.data_ptr<uintptr_t>();
-  const uintptr_t* dst_v_tbl_ptr = IsMLA || !dst_v_layers.defined() ? nullptr : dst_v_layers.data_ptr<uintptr_t>();
-
-  cudaStream_t torch_current_stream = at::cuda::getCurrentCUDAStream();
-  if constexpr (PageHeadLayout) {
-    transfer_page_head_kernel_impl_dcu<SrcOffsetFn_K, SrcOffsetFn_V,DstOffsetFn_K,DstOffsetFn_V><<<grid_dim, threads_per_block, 0, torch_current_stream>>>(
-        src_k_ptr,
-        dst_k_ptr,
-        src_v_ptr,
-        dst_v_ptr,
-        src_indices.data_ptr<int64_t>(),
-        dst_indices.data_ptr<int64_t>(),
-        start_layer_id,
-        num_layers_to_process,
-        num_items,
-        items_per_warp,
-        item_size,
-        src_layout_dim,
-        dst_layout_dim,
-        src_k_tbl_ptr,
-        dst_k_tbl_ptr,
-        src_v_tbl_ptr,
-        dst_v_tbl_ptr,
-        page_size,
-        head_num,
-        v_head_dim);
-  } else {
-   
-  }
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
-}
-
-
-void transfer_kv_all_layer_to_pf_dcu(
-    const at::Tensor src_k_layers,
-    at::Tensor dst_k,
-    const at::Tensor src_v_layers,
-    at::Tensor dst_v,
-    const at::Tensor src_indices,
-    const at::Tensor dst_indices,
-    int64_t item_size,
-    int64_t dst_layout_dim,
-    int64_t num_layers,
-    int64_t block_quota,
-    int64_t num_warps_per_block,
-    int64_t page_size,
-    int64_t head_num,
-    int64_t v_head_dim) {
-  TORCH_CHECK(num_layers == src_k_layers.size(0), "Number of layers in source k tensor does not match num_layers");
-  at::Tensor empty;
-  transfer_kv_launcher_dcu<get_global_offset_per_head_dcu_k<const char>, get_global_offset_per_head_dcu_v<const char>,get_global_offset_pf_dcu_k<char>,get_global_offset_pf_dcu_v<char>, false,true>(
-      empty,
-      dst_k,
-      empty,
-      dst_v,
-      src_indices,
-      dst_indices,
-      0,
-      num_layers,
-      item_size,
-      0,
-      dst_layout_dim,
-      src_k_layers,
-      empty,
-      src_v_layers,
-      empty,
-      block_quota,
-      num_warps_per_block,
-      page_size,
-      head_num,
-      v_head_dim);
-}
-
-
-
 template <auto SrcOffsetFn, auto DstOffsetFn>
 __global__ void transfer_page_head_kernel_impl(
     const void* __restrict__ src_k,
@@ -594,6 +418,53 @@ __global__ void transfer_kernel_impl(
   }
 }
 
+template <auto SrcOffsetFn, auto DstOffsetFn>
+__global__ void transfer_kernel_impl_dcu(
+    const void* __restrict__ src_k,
+    void* __restrict__ dst_k,
+    const void* __restrict__ src_v,
+    void* __restrict__ dst_v,
+    const int64_t* __restrict__ src_indices,
+    const int64_t* __restrict__ dst_indices,
+    int64_t start_layer_id,
+    int64_t num_layers_to_process,
+    int64_t item_size_bytes,
+    int64_t src_layout_dim,
+    int64_t dst_layout_dim,
+    const uintptr_t* __restrict__ src_k_layer_tbl,
+    const uintptr_t* __restrict__ dst_k_layer_tbl,
+    const uintptr_t* __restrict__ src_v_layer_tbl,
+    const uintptr_t* __restrict__ dst_v_layer_tbl,
+    int64_t page_size ) {
+
+  int32_t page_index_id = blockIdx.x;
+  // int32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int32_t lane_id = threadIdx.x;
+  int32_t total_threads = blockDim.x;
+
+  const int64_t s_page_id = src_indices[page_index_id * page_size] / page_size;
+  const int64_t d_page_id = dst_indices[page_index_id * page_size] / page_size;    
+  for (int64_t layer_id = start_layer_id; layer_id < start_layer_id + num_layers_to_process; ++layer_id) {
+      const char* src_ptr = SrcOffsetFn(
+          static_cast<const char*>(src_k), src_k_layer_tbl, layer_id, src_layout_dim, s_page_id, item_size_bytes);
+      char* dst_ptr = DstOffsetFn(
+          static_cast<char*>(dst_k), dst_k_layer_tbl, layer_id, dst_layout_dim, d_page_id, item_size_bytes);
+      // if(page_index_id==0 && lane_id ==0 ){
+      //   printf("DEBUG src_ptr:%p,src_ptr:%lu,dst_ptr:%p,dst_ptr:%lu ,layer_id:%d,s_page_id:%d,d_page_id:%d,src_layout_dim:%d,dst_layout_dim:%d,item_size_bytes:%d,total_threads:%d,num_layers_to_process:%d begin\n",(void*)src_ptr,(uintptr_t)src_ptr,(void*)dst_ptr,(uintptr_t)dst_ptr,layer_id,s_page_id,d_page_id,src_layout_dim,dst_layout_dim,item_size_bytes,total_threads,num_layers_to_process);
+      // }
+      transfer_item_warp_dcu(lane_id, src_ptr, dst_ptr, item_size_bytes,total_threads);
+      // if(page_index_id==0 && lane_id ==0 ){
+      //   printf("DEBUG src_ptr:%p,src_ptr:%lu,dst_ptr:%p,dst_ptr:%lu ,layer_id:%d,s_page_id:%d,d_page_id:%d,src_layout_dim:%d,dst_layout_dim:%d,item_size_bytes:%d finish\n",(void*)src_ptr,(uintptr_t)src_ptr,(void*)dst_ptr,(uintptr_t)dst_ptr,layer_id,s_page_id,d_page_id,src_layout_dim,dst_layout_dim,item_size_bytes);
+      // }
+      const char* src_v_ptr = SrcOffsetFn(
+          static_cast<const char*>(src_v), src_v_layer_tbl, layer_id, src_layout_dim, s_page_id, item_size_bytes);
+      char* dst_v_ptr = DstOffsetFn(
+          static_cast<char*>(dst_v), dst_v_layer_tbl, layer_id, dst_layout_dim, d_page_id, item_size_bytes);
+      transfer_item_warp_dcu(lane_id, src_v_ptr, dst_v_ptr, item_size_bytes,total_threads);
+  }
+  
+}
+
 template <auto SrcOffsetFn, auto DstOffsetFn, bool IsMLA, bool PageHeadLayout = false>
 void transfer_kv_launcher(
     const at::Tensor& src_k,
@@ -669,14 +540,6 @@ void transfer_kv_launcher(
         page_size,
         head_num);
   } else {
-        // const int64_t* __restrict__ s_indices = src_indices.data_ptr<int64_t>();
-        // const int64_t* __restrict__ d_indices = dst_indices.data_ptr<int64_t>();
-        // const char* src_ptr = SrcOffsetFn(
-        //         static_cast<const char*>(src_k_ptr), src_k_tbl_ptr, 0, src_layout_dim, s_indices[0], item_size);
-        // char* dst_ptr = DstOffsetFn(
-        //         static_cast<char*>(dst_k_ptr), dst_k_tbl_ptr, 0, dst_layout_dim,d_indices[0], item_size);
-        // printf("DEBUG src_ptr:%p,src_ptr:%lu,dst_ptr:%p,dst_ptr:%lu\n",(void*)&src_ptr,(uintptr_t)&src_ptr,(void*)dst_ptr,(uintptr_t)&dst_ptr);
-        // transfer_item_warp(0,src_ptr,dst_ptr,item_size);
 
     transfer_kernel_impl<SrcOffsetFn, DstOffsetFn, IsMLA><<<grid_dim, threads_per_block, 0, torch_current_stream>>>(
         src_k_ptr,
@@ -698,6 +561,79 @@ void transfer_kv_launcher(
         dst_v_tbl_ptr);
 
   }
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+
+template <auto SrcOffsetFn, auto DstOffsetFn>
+void transfer_kv_launcher_dcu(
+    const at::Tensor& src_k,
+    at::Tensor& dst_k,
+    const at::Tensor& src_v,
+    at::Tensor& dst_v,
+    const at::Tensor& src_indices,
+    const at::Tensor& dst_indices,
+    int64_t start_layer_id,
+    int64_t num_layers_to_process,
+    int64_t item_size,
+    int64_t src_layout_dim,
+    int64_t dst_layout_dim,
+    const at::Tensor& src_k_layers,
+    const at::Tensor& dst_k_layers,
+    const at::Tensor& src_v_layers,
+    const at::Tensor& dst_v_layers,
+    int64_t page_size,
+    int64_t num_warps_per_block) {
+
+  TORCH_CHECK(src_indices.is_cuda(), "Source indices must be a CUDA tensor");
+  TORCH_CHECK(dst_indices.is_cuda(), "Destination indices must be a CUDA tensor");
+  TORCH_CHECK(src_indices.scalar_type() == at::kLong, "Source indices must be of type long");
+  TORCH_CHECK(dst_indices.scalar_type() == at::kLong, "Destination indices must be of type long");
+  TORCH_CHECK(src_indices.numel() == dst_indices.numel(), "Source and destination indices must have the same length");
+  TORCH_CHECK(item_size % 8 == 0, "Item byte size must be divisible by 8");
+
+  auto div_up = [](int64_t x, int64_t y) { return (x + y - 1) / y; };
+  const int64_t num_items = src_indices.numel();
+  const int64_t num_pages = num_items / page_size;
+  dim3 grid_dim(num_pages, 1, 1);
+  const int32_t threads_per_block = num_warps_per_block * WARP_SIZE;
+
+
+  const void* src_k_ptr = src_k.defined() ? src_k.data_ptr() : nullptr;
+  void* dst_k_ptr = dst_k.defined() ? dst_k.data_ptr() : nullptr;
+  const void* src_v_ptr = !src_v.defined() ? nullptr : src_v.data_ptr();
+  void* dst_v_ptr = !dst_v.defined() ? nullptr : dst_v.data_ptr();
+#ifdef USE_ROCM
+  src_k_ptr = get_rocm_kernel_accessible_ptr(src_k);
+  dst_k_ptr = get_rocm_kernel_accessible_ptr(dst_k);
+  src_v_ptr = get_rocm_kernel_accessible_ptr(src_v);
+  dst_v_ptr = get_rocm_kernel_accessible_ptr(dst_v);
+#endif
+  const uintptr_t* src_k_tbl_ptr = src_k_layers.defined() ? src_k_layers.data_ptr<uintptr_t>() : nullptr;
+  const uintptr_t* dst_k_tbl_ptr = dst_k_layers.defined() ? dst_k_layers.data_ptr<uintptr_t>() : nullptr;
+  const uintptr_t* src_v_tbl_ptr = !src_v_layers.defined() ? nullptr : src_v_layers.data_ptr<uintptr_t>();
+  const uintptr_t* dst_v_tbl_ptr = !dst_v_layers.defined() ? nullptr : dst_v_layers.data_ptr<uintptr_t>();
+
+  cudaStream_t torch_current_stream = at::cuda::getCurrentCUDAStream();
+  // printf("transfer_kv_launcher_dcu!!!\n");   
+  transfer_kernel_impl_dcu<SrcOffsetFn, DstOffsetFn><<<grid_dim, threads_per_block, 0, torch_current_stream>>>(
+      src_k_ptr,
+      dst_k_ptr,
+      src_v_ptr,
+      dst_v_ptr,
+      src_indices.data_ptr<int64_t>(),
+      dst_indices.data_ptr<int64_t>(),
+      start_layer_id,
+      num_layers_to_process,
+      item_size,
+      src_layout_dim,
+      dst_layout_dim,
+      src_k_tbl_ptr,
+      dst_k_tbl_ptr,
+      src_v_tbl_ptr,
+      dst_v_tbl_ptr,
+      page_size);
+
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -1761,6 +1697,78 @@ void transfer_kv_all_direct_pf_lf_H2D_dcu(
       dst_ptrs_v[start_layer_id][d_index].copy_(src_ptrs_v[s_index][start_layer_id],true);
     }
   }
+
+void transfer_kv_all_kernel_lf_pf_D2H_dcu(
+    const at::Tensor& src_k,
+    at::Tensor dst_k,
+    const at::Tensor& src_v,
+    at::Tensor dst_v,
+    const at::Tensor& src_indices,
+    const at::Tensor& dst_indices,
+    int64_t item_size,
+    int64_t src_layout_dim,
+    int64_t dst_layout_dim,
+    int64_t page_size,
+    int64_t layer_num,
+    int64_t num_warps_per_block){
+
+    TORCH_CHECK(layer_num == src_k.size(0), "Number of layers in source k tensor does not match num_layers");
+    at::Tensor empty;
+    transfer_kv_launcher_dcu<get_global_offset_lf_tbl_dcu<const char>, get_global_offset_pf_dcu<char>>(
+      empty,
+      dst_k,
+      empty,
+      dst_v,
+      src_indices,
+      dst_indices,
+      0,
+      layer_num,
+      item_size,
+      src_layout_dim,
+      dst_layout_dim,
+      src_k,
+      empty,
+      src_v,
+      empty,
+      page_size,
+      num_warps_per_block);
+}
+
+void transfer_kv_per_layer_kernel_pf_lf_H2D_dcu(
+    const at::Tensor& src_k,
+    at::Tensor dst_k,
+    const at::Tensor& src_v,
+    at::Tensor dst_v,
+    const at::Tensor& src_indices,
+    const at::Tensor& dst_indices,
+    int64_t item_size,
+    int64_t src_layout_dim,
+    int64_t page_size,
+    int64_t layer_id,
+    int64_t num_warps_per_block){
+    
+    at::Tensor empty;
+    transfer_kv_launcher_dcu<get_global_offset_pf_dcu<const char>, get_global_offset_lf_dcu<char>>(
+      src_k,
+      dst_k,
+      src_v,
+      dst_v,
+      src_indices,
+      dst_indices,
+      layer_id,
+      1,
+      item_size,
+      src_layout_dim,
+      0,
+      empty,
+      empty,
+      empty,
+      empty,
+      page_size,
+      num_warps_per_block);
+
+
+}
 
 void transfer_kv_all_direct_lf_pf_D2H_dcu(
     const std::vector<at::Tensor>& src_ptrs_k,

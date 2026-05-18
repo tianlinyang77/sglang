@@ -759,10 +759,10 @@ class HiCacheController:
             raise ValueError(f"Unsupported io backend")
 
     def start_loading(self) -> int:
-        logger.info(f"start_loading before")
+        # logger.info(f"start_loading before")
         if len(self.load_queue) == 0:
             return -1
-        logger.info(f"start_loading after")
+        # logger.info(f"start_loading after")
         producer_id = self.layer_done_counter.update_producer()
         op = CacheOperation.merge_ops(self.load_queue)
         host_indices, device_indices = self.move_indices(op)

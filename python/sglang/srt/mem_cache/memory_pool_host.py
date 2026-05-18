@@ -31,12 +31,13 @@ from sglang.srt.mem_cache.memory_pool import (
     MLATokenToKVPool,
     NSATokenToKVPool,
 )
-from sglang.srt.utils import is_cuda, is_mps, is_npu, is_xpu
+from sglang.srt.utils import is_cuda, is_mps, is_npu, is_xpu,is_hip
 
 _is_cuda = is_cuda()
 _is_npu = is_npu()
 _is_xpu = is_xpu()
 _is_mps = is_mps()
+_is_hip = is_hip()
 if not (_is_npu or _is_xpu or _is_mps):
     from sgl_kernel.kvcacheio import (
         transfer_kv_all_layer,
@@ -54,6 +55,8 @@ if not (_is_npu or _is_xpu or _is_mps):
         transfer_kv_per_layer_ph_lf,
         transfer_kv_all_direct_lf_pf_D2H_dcu,
         transfer_kv_all_direct_pf_lf_H2D_dcu,
+        transfer_kv_all_kernel_lf_pf_D2H_dcu,
+        transfer_kv_per_layer_kernel_pf_lf_H2D_dcu,
     )
 if _is_npu:
     from sgl_kernel_npu.kvcacheio import TransferDirection, transfer_kv_dim_exchange
@@ -503,6 +506,7 @@ class MHATokenToKVPoolHost(HostKVCache):
                         element_size=self.element_dim * self.dtype.itemsize,
                     )
                 else:
+                    # logger.info(f"layer_first device_pool.k_data_ptrs:{device_pool.k_data_ptrs},self.k_data_ptrs:{self.k_data_ptrs},device_pool.v_data_ptrs:{device_pool.v_data_ptrs},self.v_data_ptrs:{self.v_data_ptrs},device_indices:{device_indices},host_indices:{host_indices}")
                     transfer_kv_all_layer(
                         src_k_layers=device_pool.k_data_ptrs,
                         dst_k_layers=self.k_data_ptrs,
@@ -514,7 +518,6 @@ class MHATokenToKVPoolHost(HostKVCache):
                         num_layers=self.layer_num,
                     )
             elif self.layout == "page_first":
-                logger.info(f"page_first self.k_buffer.dataptr:{self.k_buffer.data_ptr()},self.k_buffer.dataptr:{hex(self.k_buffer.data_ptr())},device_pool.k_data_ptrs:{device_pool.k_data_ptrs}")
                 transfer_kv_all_layer_lf_pf(
                     src_k_layers=device_pool.k_data_ptrs,
                     dst_k=self.k_buffer,
@@ -527,7 +530,6 @@ class MHATokenToKVPoolHost(HostKVCache):
                     num_layers=self.layer_num,
                 )
             elif self.layout == "page_head":
-                logger.info("page_head")
                 transfer_kv_all_layer_lf_ph(
                     src_k_layers=device_pool.k_data_ptrs,
                     dst_k=self.k_buffer,
@@ -554,10 +556,6 @@ class MHATokenToKVPoolHost(HostKVCache):
                     page_size=self.page_size,
                 )
             elif self.layout == "page_first_direct":
-                # logger.info(f"page_first_direct,self.k_buffer:{self.k_buffer},self.v_buffer:{self.v_buffer}")
-                # logger.info(f"page_first self.k_buffer.dataptr:{self.k_buffer.data_ptr()},self.k_buffer.dataptr:{hex(self.k_buffer.data_ptr())},device_pool.k_buffer:{device_pool.k_buffer[0].data_ptr()},device_pool.k_buffer:{hex(device_pool.k_buffer[0].data_ptr())}")
-                # logger.info(f"host_indices:{host_indices}")
-                # old_slice = self.k_buffer[dst_page, 1, :, :, :].clone()
                 transfer_kv_all_layer_direct_lf_pf(
                     src_ptrs=device_pool.k_buffer + device_pool.v_buffer,
                     dst_ptrs=[self.k_buffer, self.v_buffer],
@@ -565,9 +563,6 @@ class MHATokenToKVPoolHost(HostKVCache):
                     dst_indices=host_indices,
                     page_size=self.page_size,
                 )
-                # new_slice = self.k_buffer[dst_page, 1, :, :, :]
-                # logger.info(f"Buffer changed: {not torch.equal(old_slice, new_slice)}")
-                # logger.info("page_first_direct success!")
             else:
                 raise ValueError(f"Unsupported layout: {self.layout}")
         elif io_backend == "kernel_ascend":
@@ -815,8 +810,9 @@ class MHATokenToKVPoolHostDCU(HostKVCache):
             dim_v = (self.page_num,self.layer_num,self.head_num, self.head_dim,self.page_size)
         else:
             raise ValueError(f"DCU HiCache Unsupported layout: {self.layout}")
-        self.token_stride_size = self.head_num * self.head_dim * self.dtype.itemsize
-        self.layout_dim = self.token_stride_size * self.layer_num
+        # self.token_stride_size = self.head_num * self.head_dim * self.dtype.itemsize
+        # self.layout_dim = self.token_stride_size * self.layer_num
+        self.token_stride_size = self.page_size * self.head_num * self.head_dim * self.dtype.itemsize
 
         alloc_func = ALLOC_MEMORY_FUNCS[self.device_pool.device]
         buffer_k = alloc_func(
@@ -853,7 +849,18 @@ class MHATokenToKVPoolHostDCU(HostKVCache):
     ):
         if io_backend == "kernel":
             if self.layout == "layout_dcu":
-                logger.info("load_to_device_per_layer kernel....")
+                transfer_kv_per_layer_kernel_pf_lf_H2D_dcu(
+                    src_k=self.k_buffer,
+                    dst_k=device_pool.k_buffer[layer_id],
+                    src_v=self.v_buffer,
+                    dst_v=device_pool.v_buffer[layer_id],
+                    src_indices=host_indices,
+                    dst_indices=device_indices,
+                    item_size=self.token_stride_size,
+                    src_layout_dim=self.token_stride_size * self.layer_num,
+                    page_size=self.page_size,
+                    layer_id=layer_id,
+                )
             else:
                 raise ValueError(f"Unsupported layout: {self.layout}")
         elif io_backend == "direct":
@@ -879,14 +886,25 @@ class MHATokenToKVPoolHostDCU(HostKVCache):
     ):
         if io_backend == "kernel":
             if self.layout == "layout_dcu":
-                logger.info("kernel layout_dcu")
+                transfer_kv_all_kernel_lf_pf_D2H_dcu(
+                    src_k=device_pool.k_data_ptrs,
+                    dst_k=self.k_buffer,
+                    src_v=device_pool.v_data_ptrs,
+                    dst_v=self.v_buffer,
+                    src_indices=device_indices,
+                    dst_indices=host_indices,
+                    item_size=self.token_stride_size,
+                    srt_layout_dim=self.token_stride_size * self.page_num,
+                    dst_layout_dim=self.token_stride_size * self.layer_num,
+                    page_size=self.page_size,
+                    layer_num=self.layer_num,
+                )
+
             else:
                 raise ValueError(f"DCU HiCache Unsupported layout: {self.layout}")
         elif io_backend == "direct":
+            # logger.info(f"device_indices:{device_indices},host_indices:{host_indices}")
             if self.layout == "layout_dcu":
-                # old_k_buffer=self.k_buffer[0,0,0,0,0].clone()
-                # dst_page = int(host_indices[0].item() / 64)  
-                # old_slice = self.k_buffer[dst_page, 1, :, :, :].clone()    
                 transfer_kv_all_direct_lf_pf_D2H_dcu(
                     src_ptrs_k=device_pool.k_buffer,
                     src_ptrs_v=device_pool.v_buffer,
@@ -897,8 +915,6 @@ class MHATokenToKVPoolHostDCU(HostKVCache):
                     start_layer_id=0,
                     page_size=self.page_size,
                 )
-                # new_slice = self.k_buffer[dst_page, 1, :, :, :]
-                # logger.info(f"Buffer changed: {not torch.equal(old_slice, new_slice)}")
                 logger.info("backup_from_device_all_layer kernel....")
             else:
                 raise ValueError(f"DCU HiCache Unsupported layout: {self.layout}")
@@ -2360,6 +2376,7 @@ class NSATokenToKVPoolHost(MLATokenToKVPoolHost):
                     item_size=self.indexer_page_stride_size,
                 )
             elif self.layout == "page_first":
+                logger.info(f"NSATokenToKVPoolHost _load_indexer_to_device_per_layer")
                 transfer_kv_per_layer_mla_pf_lf(
                     src=self.index_k_with_scale_buffer,
                     dst=device_pool.index_k_with_scale_buffer[layer_id],

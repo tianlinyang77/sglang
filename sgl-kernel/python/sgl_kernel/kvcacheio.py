@@ -62,6 +62,62 @@ def dcu_alloc_decode_kernel(
         page_size,
     )
 
+def transfer_kv_all_kernel_lf_pf_D2H_dcu(
+    src_k: torch.Tensor,
+    dst_k: torch.Tensor,
+    src_v: torch.Tensor,
+    dst_v: torch.Tensor,
+    src_indices: torch.Tensor,
+    dst_indices: torch.Tensor,
+    item_size: int,
+    srt_layout_dim: int,
+    dst_layout_dim: int,
+    page_size: int,
+    layer_num: int,
+    num_warps_per_block: int = 16 if _is_hip else 32,
+):
+    torch.ops.sgl_kernel.transfer_kv_all_kernel_lf_pf_D2H_dcu.default(
+        src_k,
+        dst_k,
+        src_v,
+        dst_v,
+        src_indices,
+        dst_indices,
+        item_size,
+        srt_layout_dim,
+        dst_layout_dim,
+        page_size,
+        layer_num,
+        num_warps_per_block,
+    )
+
+def transfer_kv_per_layer_kernel_pf_lf_H2D_dcu(
+    src_k: torch.Tensor,
+    dst_k: torch.Tensor,
+    src_v: torch.Tensor,
+    dst_v: torch.Tensor,
+    src_indices: torch.Tensor,
+    dst_indices: torch.Tensor,
+    item_size: int,
+    src_layout_dim: int,
+    page_size: int,
+    layer_id: int,
+    num_warps_per_block: int = 16 if _is_hip else 32,
+):
+    torch.ops.sgl_kernel.transfer_kv_per_layer_kernel_pf_lf_H2D_dcu.default(
+        src_k,
+        dst_k,
+        src_v,
+        dst_v,
+        src_indices,
+        dst_indices,
+        item_size,
+        src_layout_dim,
+        page_size,
+        layer_id,
+        num_warps_per_block,
+    )
+
 def transfer_kv_all_direct_pf_lf_H2D_dcu(
     src_ptrs_k: torch.Tensor,
     src_ptrs_v: torch.Tensor,
@@ -104,41 +160,6 @@ def transfer_kv_all_direct_lf_pf_D2H_dcu(
         start_layer_id,
         page_size,
     )
-
-
-def transfer_kv_all_layer_to_pf_dcu(
-    src_k_layers: torch.Tensor,
-    dst_k: torch.Tensor,
-    src_v_layers: torch.Tensor,
-    dst_v: torch.Tensor,
-    src_indices: torch.Tensor,
-    dst_indices: torch.Tensor,
-    item_size: int,
-    dst_layout_dim: int,
-    num_layers: int,
-    page_size: int,
-    head_num: int,
-    v_head_dim: int,
-    block_quota: int = 2,
-    num_warps_per_block: int = 16 if _is_hip else 32,
-):
-    torch.ops.sgl_kernel.transfer_kv_all_layer_to_pf_dcu.default(
-        src_k_layers,
-        dst_k,
-        src_v_layers,
-        dst_v,
-        src_indices,
-        dst_indices,
-        item_size,
-        dst_layout_dim,
-        num_layers,
-        page_size,
-        head_num,
-        v_head_dim,
-        block_quota,
-        num_warps_per_block,
-    )
-
 
 def transfer_kv_per_layer(
     src_k: torch.Tensor,
