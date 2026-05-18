@@ -183,7 +183,6 @@ def chunk_fwd_o(
             v=v,
             h=h,
             g=g,
-            g_gamma=None,
             o=o,
             cu_seqlens=cu_seqlens,
             chunk_indices=chunk_indices,
@@ -196,8 +195,6 @@ def chunk_fwd_o(
             BT=BT,
             NT=NT,
             B=B,
-            use_exp2=False,
-            transpose_state_layout=True,
             kernel_cfg=None,
         )
     return o
