@@ -86,6 +86,73 @@ def _fused_mamba_state_scatter_with_mask_kernel(
     data = tl.load(src_ptr + src_offset + offsets, mask=mask)
     tl.store(dst_ptr + dst_offset + offsets, data, mask=mask)
 
+@triton.jit
+def _fused_mamba_state_scatter_with_mask_kernel_v2(
+    src_ptr,
+    dst_ptr,
+    dst_indices_raw_ptr,
+    step_indices_raw_ptr,
+    elem_per_entry: tl.constexpr,
+    num_blocks: tl.constexpr,
+    src_layer_stride,
+    src_req_stride,
+    src_step_stride,
+    dst_layer_stride,
+    dst_req_stride,
+    src_req_size,
+    src_step_size,
+    dst_req_size,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    pid_layer = tl.program_id(1).to(tl.int64)
+
+    pid_req = pid // num_blocks
+    pid_block = pid - pid_req * num_blocks
+
+    step_idx = tl.load(step_indices_raw_ptr + pid_req).to(tl.int64)
+
+    if step_idx < 0:
+        return
+
+    dst_idx = tl.load(dst_indices_raw_ptr + pid_req).to(tl.int64)
+    src_idx = pid_req.to(tl.int64)
+
+    if not (
+        (dst_idx >= 0)
+        & (dst_idx < dst_req_size)
+        & (src_idx < src_req_size)
+        & (step_idx >= 0)
+        & (step_idx < src_step_size)
+    ):
+        return
+
+    src_offset = (
+        pid_layer * src_layer_stride
+        + src_idx * src_req_stride
+        + step_idx * src_step_stride
+    )
+    dst_offset = (
+        pid_layer * dst_layer_stride
+        + dst_idx * dst_req_stride
+    )
+
+    offsets = pid_block * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < elem_per_entry
+
+    data = tl.load(src_ptr + src_offset + offsets, mask=mask)
+    tl.store(dst_ptr + dst_offset + offsets, data, mask=mask)
+
+
+def _select_block_size(elem_per_entry: int) -> int:
+    if elem_per_entry <= 256:
+        return 256
+    if elem_per_entry <= 512:
+        return 512
+    if elem_per_entry <= 1024:
+        return 1024
+    return 2048
+
 
 def fused_mamba_state_scatter_with_mask(
     dst: torch.Tensor,  # [num_layers, cache_size, *state_shape]
@@ -140,44 +207,48 @@ def fused_mamba_state_scatter_with_mask(
             f"indices length mismatch: {dst_indices_raw.shape[0]=} vs {step_indices_raw.shape[0]=}"
         )
 
+    if not dst.is_contiguous():
+        raise ValueError("dst tensor must be contiguous")
+    if not src.is_contiguous():
+        raise ValueError("src tensor must be contiguous")
+
+    if dst_indices_raw.dtype != torch.int32:
+        dst_indices_raw = dst_indices_raw.to(torch.int32)
+    if not dst_indices_raw.is_contiguous():
+        dst_indices_raw = dst_indices_raw.contiguous()
+
+    if step_indices_raw.dtype != torch.int32:
+        step_indices_raw = step_indices_raw.to(torch.int32)
+    if not step_indices_raw.is_contiguous():
+        step_indices_raw = step_indices_raw.contiguous()
+
     num_layers = dst.shape[0]
     src_req_size = src.shape[1]
     src_step_size = src.shape[2]
     dst_req_size = dst.shape[1]
 
-    # Flatten trailing dimensions: number of elements per (layer, cache_line) entry.
     elem_per_entry = dst.numel() // (dst.shape[0] * dst.shape[1])
 
-    # Get strides (in elements, not bytes)
     src_layer_stride = src.stride(0)
     src_req_stride = src.stride(1)
     src_step_stride = src.stride(2)
     dst_layer_stride = dst.stride(0)
     dst_req_stride = dst.stride(1)
 
-    # Ensure indices are int32 and contiguous
-    dst_indices_raw = dst_indices_raw.to(torch.int32).contiguous()
-    step_indices_raw = step_indices_raw.to(torch.int32).contiguous()
+    BLOCK_SIZE = _select_block_size(elem_per_entry)
+    num_blocks = triton.cdiv(elem_per_entry, BLOCK_SIZE)
 
-    # Ensure tensors are contiguous
-    if not dst.is_contiguous():
-        raise ValueError("dst tensor must be contiguous")
-    if not src.is_contiguous():
-        raise ValueError("src tensor must be contiguous")
+    grid = (total_requests * num_blocks, num_layers)
 
-    # Block size for copying elements
-    BLOCK_SIZE = 1024
+    num_warps = 4 if BLOCK_SIZE <= 1024 else 8
 
-    # Grid over all requests - invalid ones will early-exit in the kernel
-    grid = (total_requests, num_layers, triton.cdiv(elem_per_entry, BLOCK_SIZE))
-
-    _fused_mamba_state_scatter_with_mask_kernel[grid](
+    _fused_mamba_state_scatter_with_mask_kernel_v2[grid](
         src,
         dst,
         dst_indices_raw,
         step_indices_raw,
-        total_requests,
         elem_per_entry,
+        num_blocks,
         src_layer_stride,
         src_req_stride,
         src_step_stride,
@@ -187,4 +258,5 @@ def fused_mamba_state_scatter_with_mask(
         src_step_size,
         dst_req_size,
         BLOCK_SIZE=BLOCK_SIZE,
+        num_warps=num_warps,
     )
