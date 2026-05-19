@@ -188,6 +188,7 @@ tl_out/
 
 # personnal
 work_dirs/
+.worktrees/
 *.csv
 
 !logo.png
