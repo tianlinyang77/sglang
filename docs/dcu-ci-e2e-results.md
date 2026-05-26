@@ -216,6 +216,12 @@ Environment fixes required for the official fork run:
 - Keep `DCU_CI_SKIP_SGLANG_BUILD=1` for the temporary fork proof because the shared image already carries the needed build artifacts.
 - Broader registered unit/server/kernel coverage remains a follow-up after runner architecture and build policy are settled.
 
+Post-run cleanup check on `10.16.1.26` at `2026-05-26T21:38:21+08:00`:
+
+- No matching `ci_sglang_dcu_26449832988*`, `ci_sglang_dcu_26450054529*`, or `ci_sglang_dcu_26450435479*` containers remained.
+- No residual `run_suite.py`, pytest, or `python3 .*test_dcu_(smoke|stage_b_flow)` processes were found.
+- Two pre-existing host-level `sglang serve` processes for DeepSeek model experiments were present; they were not removed because they were not owned by this CI run.
+
 ## Earlier Broader PR Baseline Evidence
 
 Earlier validation also proved a broader but slower PR baseline. This is kept as
