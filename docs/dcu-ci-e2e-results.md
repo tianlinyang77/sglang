@@ -101,9 +101,9 @@ Slash-command runtime validation on PR #3:
   - `Rerun UT (DCU)`: success, `2026-05-26T01:08:32Z` to `2026-05-26T01:09:31Z`
 - Post-run process check on `10.16.1.26` at `2026-05-26 09:18:05 CST`: no matching `ci_sglang_dcu_26426462188*` or `ci_sglang_dcu_26426537606*` containers; no residual `run_suite.py`, `sglang serve`, pytest, or `python3 .*test_` processes beyond the `pgrep` command itself.
 
-## Current Flow-Smoke PR CI Validation
+## Previous Flow-Smoke PR CI Validation
 
-The current validation scope is to prove the official-style PR CI registration,
+This validation scope was to prove the official-style PR CI registration,
 triggering, gate, matrix, runner, container, and finish-check flow. It is not
 intended to prove broad DCU test coverage yet.
 
@@ -116,7 +116,7 @@ intended to prove broad DCU test coverage yet.
 - Temporary runner: `nmz26-dcu-pr` on `10.16.1.26`
 - Runner label: `dcu-nmz26`
 
-Current required flow-smoke baseline:
+Required flow-smoke baseline in this run:
 
 - `stage-a-dcu`: `test/registered/dcu/interface/test_dcu_smoke.py`
 - `stage-b-dcu`: `test/registered/unit/managers/test_prefill_adder.py`
@@ -153,11 +153,50 @@ Environment fixes required before the successful run:
 - Set `PYTHONDONTWRITEBYTECODE=1` and clean/chown the checkout after container jobs to prevent root-owned `__pycache__` files from breaking the next checkout.
 - Mount `/public/opendas/DL_DATA/llm-models` into the CI container so the PR baseline can resolve local model paths.
 
+## Current Official-Fork Baseline Prep
+
+Current branch:
+
+- Local branch: `dcu-pr-flow-smoke`
+- Commit title: `ci: narrow dcu pr flow smoke baseline`
+- Target fork: `tianlinyang77/sglang`
+- GitHub push status from this environment: blocked by `github.com:443` timeout.
+
+Current required flow-smoke baseline:
+
+- `stage-a-dcu`: `test/registered/dcu/interface/test_dcu_smoke.py`
+- `stage-b-dcu`: `test/registered/dcu/interface/test_dcu_stage_b_flow_a.py`
+- `stage-b-dcu`: `test/registered/dcu/interface/test_dcu_stage_b_flow_b.py`
+
+Local runner dry-run on `10.16.1.26`:
+
+- Temporary container: `ci_sglang_dcu_codex_flow`
+- Container image: `10.16.1.152:5000/jenkins/model_test_env/sglang:0.5.10rc0-ubuntu22.04-dtk26.04-py3.10-20260518-2235`
+- Install mode: `DCU_CI_SKIP_SGLANG_BUILD=1`
+- `stage-a-dcu`: passed, `1/1` file, elapsed `18.35s`
+- `stage-b-dcu` partition `0/2`: passed, ran only `test/registered/dcu/interface/test_dcu_stage_b_flow_a.py`, elapsed `18.74s`
+- `stage-b-dcu` partition `1/2`: passed, ran only `test/registered/dcu/interface/test_dcu_stage_b_flow_b.py`, elapsed `18.92s`
+
+Observed environment constraint:
+
+- Full `sgl-kernel` rebuild on `10.16.1.26` fails before tests with
+  `Unsupported GPU architecture detected 'gfx938'. Expected 'gfx942' or 'gfx950'.`
+- Therefore the official-fork flow proof keeps the required Stage B files
+  independent of model paths and kernel rebuilds; broader registered
+  unit/server/kernel coverage stays in follow-up PRs after runner architecture
+  and build policy are settled.
+
+Post-run cleanup:
+
+- Temporary container `ci_sglang_dcu_codex_flow` removed.
+- No residual `run_suite.py`, `test_dcu_stage_b_flow*`, or `test_dcu_smoke`
+  processes were found on `10.16.1.26`.
+
 ## Earlier Broader PR Baseline Evidence
 
 Earlier validation also proved a broader but slower PR baseline. This is kept as
-historical evidence only; the current official-flow validation uses the smaller
-flow-smoke baseline above.
+historical evidence only; the official-fork validation uses the smaller
+flow-smoke baseline in the current section above.
 
 - `stage-a-dcu`: `test/registered/dcu/interface/test_dcu_smoke.py`
 - `stage-b-dcu`: 28 files with BW1000 `sgl-test` evidence

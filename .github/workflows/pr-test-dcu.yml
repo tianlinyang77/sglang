@@ -329,8 +329,8 @@ jobs:
             python3 run_suite.py \
               --hw dcu \
               --suite stage-b-dcu \
-              --include-file registered/unit/managers/test_prefill_adder.py \
-              --include-file registered/unit/mem_cache/test_radix_cache_unit.py \
+              --include-file registered/dcu/interface/test_dcu_stage_b_flow_a.py \
+              --include-file registered/dcu/interface/test_dcu_stage_b_flow_b.py \
               --auto-partition-id ${{ matrix.part }} \
               --auto-partition-size 2 \
               --timeout-per-file 120 \
