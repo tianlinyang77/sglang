@@ -153,44 +153,68 @@ Environment fixes required before the successful run:
 - Set `PYTHONDONTWRITEBYTECODE=1` and clean/chown the checkout after container jobs to prevent root-owned `__pycache__` files from breaking the next checkout.
 - Mount `/public/opendas/DL_DATA/llm-models` into the CI container so the PR baseline can resolve local model paths.
 
-## Current Official-Fork Baseline Prep
+## Official Fork PR Flow Validation
 
-Current branch:
+This validation moved from the minimal `sgl-dcu-test` repository to the real
+`tianlinyang77/sglang` fork while keeping the required test set intentionally
+small. The scope is still PR control-flow closure, not broad DCU coverage.
 
-- Local branch: `dcu-pr-flow-smoke`
-- Commit title: `ci: narrow dcu pr flow smoke baseline`
-- Target fork: `tianlinyang77/sglang`
-- GitHub push status from this environment: blocked by `github.com:443` timeout.
+- Repository: `tianlinyang77/sglang`
+- PR: `https://github.com/tianlinyang77/sglang/pull/1`
+- Base branch: `dcu-pr-flow-base`
+- Head branch: `dcu-pr-flow-pr`
+- Head commit: `96faecb01db00be4367572dcedfc620c765923c4`
+- Required check candidate: `PR Test (DCU) finish`
+- Temporary runner: `nmz26-dcu-sglang` on `10.16.1.26`
+- Runner label: `dcu-nmz26`
+- Container image: `10.16.1.152:5000/jenkins/model_test_env/sglang:0.5.10rc0-ubuntu22.04-dtk26.04-py3.10-20260518-2235`
 
-Current required flow-smoke baseline:
+Required flow-smoke baseline:
 
 - `stage-a-dcu`: `test/registered/dcu/interface/test_dcu_smoke.py`
 - `stage-b-dcu`: `test/registered/dcu/interface/test_dcu_stage_b_flow_a.py`
 - `stage-b-dcu`: `test/registered/dcu/interface/test_dcu_stage_b_flow_b.py`
 
-Local runner dry-run on `10.16.1.26`:
+Validated behavior:
 
-- Temporary container: `ci_sglang_dcu_codex_flow`
-- Container image: `10.16.1.152:5000/jenkins/model_test_env/sglang:0.5.10rc0-ubuntu22.04-dtk26.04-py3.10-20260518-2235`
-- Install mode: `DCU_CI_SKIP_SGLANG_BUILD=1`
-- `stage-a-dcu`: passed, `1/1` file, elapsed `18.35s`
-- `stage-b-dcu` partition `0/2`: passed, ran only `test/registered/dcu/interface/test_dcu_stage_b_flow_a.py`, elapsed `18.74s`
-- `stage-b-dcu` partition `1/2`: passed, ran only `test/registered/dcu/interface/test_dcu_stage_b_flow_b.py`, elapsed `18.92s`
+- `pull_request/synchronize` triggers the DCU workflow when the base branch is in scope.
+- Without `run-ci`, `Check changes` succeeds and `Call PR gate / pr-gate` fails with the expected missing-label message.
+- Adding `run-ci` triggers `pull_request/labeled` and lets the gate pass.
+- `validate-config` resolves `DCU_CI_RUNNER_LABEL`, `DCU_CI_IMAGE`, and `DCU_CI_SKIP_SGLANG_BUILD`.
+- `Stage A DCU smoke` runs successfully on `nmz26-dcu-sglang`.
+- `Stage B DCU smoke` expands into two matrix partitions, both running successfully on `nmz26-dcu-sglang`.
+- `PR Test (DCU) finish` completes successfully after Stage A and both Stage B partitions pass.
 
-Observed environment constraint:
+Evidence runs:
 
-- Full `sgl-kernel` rebuild on `10.16.1.26` fails before tests with
-  `Unsupported GPU architecture detected 'gfx938'. Expected 'gfx942' or 'gfx950'.`
-- Therefore the official-fork flow proof keeps the required Stage B files
-  independent of model paths and kernel rebuilds; broader registered
-  unit/server/kernel coverage stays in follow-up PRs after runner architecture
-  and build policy are settled.
+- No-label PR gate control: `https://github.com/tianlinyang77/sglang/actions/runs/26449438909`
+  - Result: failed as expected at `Call PR gate / pr-gate`
+  - Gate log: labels were `[]`; message was missing required label `run-ci`
+- `workflow_dispatch` Stage A: `https://github.com/tianlinyang77/sglang/actions/runs/26449832988`
+  - Result: `PR Test (DCU) finish` success
+  - `Stage A DCU smoke`: success on `nmz26-dcu-sglang`, `2026-05-26T13:08:24Z` to `2026-05-26T13:09:45Z`
+- `workflow_dispatch` Stage B: `https://github.com/tianlinyang77/sglang/actions/runs/26450054529`
+  - Result: `PR Test (DCU) finish` success
+  - `Stage B DCU smoke (0)`: success on `nmz26-dcu-sglang`, `2026-05-26T13:12:38Z` to `2026-05-26T13:13:52Z`
+  - `Stage B DCU smoke (1)`: success on `nmz26-dcu-sglang`, `2026-05-26T13:13:56Z` to `2026-05-26T13:15:10Z`
+- `run-ci` labeled PR run: `https://github.com/tianlinyang77/sglang/actions/runs/26450435479`
+  - Result: `PR Test (DCU) finish` success
+  - `Check changes`: success, `2026-05-26T13:19:10Z` to `2026-05-26T13:19:19Z`
+  - `Call PR gate / pr-gate`: success, `2026-05-26T13:19:21Z` to `2026-05-26T13:19:26Z`
+  - `Validate DCU config`: success, `2026-05-26T13:19:29Z` to `2026-05-26T13:19:37Z`
+  - `Stage A DCU smoke`: success on `nmz26-dcu-sglang`, `2026-05-26T13:19:42Z` to `2026-05-26T13:20:57Z`
+  - `Stage B DCU smoke (0)`: success on `nmz26-dcu-sglang`, `2026-05-26T13:21:04Z` to `2026-05-26T13:22:20Z`
+  - `Stage B DCU smoke (1)`: success on `nmz26-dcu-sglang`, `2026-05-26T13:22:23Z` to `2026-05-26T13:23:40Z`
+  - `PR Test (DCU) finish`: success, `2026-05-26T13:23:44Z` to `2026-05-26T13:23:48Z`
 
-Post-run cleanup:
+Environment fixes required for the official fork run:
 
-- Temporary container `ci_sglang_dcu_codex_flow` removed.
-- No residual `run_suite.py`, `test_dcu_stage_b_flow*`, or `test_dcu_smoke`
-  processes were found on `10.16.1.26`.
+- Replace the third-party `dorny/paths-filter@v3` dependency with an inline `git diff` path filter for the DCU workflow. The fork smoke run initially failed before DCU jobs because the GitHub-hosted runner could not download that action.
+- Configure temporary runner host Git to use the local GitHub proxy:
+  `git config --global http.https://github.com.proxy http://127.0.0.1:12897`.
+  This is a test-cluster network requirement, not an official workflow requirement.
+- Keep `DCU_CI_SKIP_SGLANG_BUILD=1` for the temporary fork proof because the shared image already carries the needed build artifacts.
+- Broader registered unit/server/kernel coverage remains a follow-up after runner architecture and build policy are settled.
 
 ## Earlier Broader PR Baseline Evidence
 

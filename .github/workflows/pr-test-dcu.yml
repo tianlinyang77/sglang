@@ -134,21 +134,25 @@ jobs:
       - name: Detect DCU-relevant changes
         id: filter
         if: steps.run-mode.outputs.run_all_tests != 'true'
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            dcu:
-              - ".github/workflows/pr-test-dcu.yml"
-              - ".github/workflows/pr-gate.yml"
-              - ".github/actions/**"
-              - "scripts/ci/dcu/**"
-              - "scripts/ci/utils/**"
-              - "python/pyproject*.toml"
-              - "python/sglang/**"
-              - "test/run_suite.py"
-              - "python/sglang/test/ci/**"
-              - "test/registered/**"
-              - "sgl-kernel/**"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ -z "${BASE_SHA}" ]]; then
+            echo "dcu=true" >> "${GITHUB_OUTPUT}"
+            echo "No pull request base SHA; treating as DCU-relevant."
+            exit 0
+          fi
+
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}" "${HEAD_SHA}"
+          changed_files="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+          echo "${changed_files}"
+
+          if echo "${changed_files}" | grep -Eq '^(\.github/workflows/pr-test-dcu\.yml|\.github/workflows/pr-gate\.yml|\.github/actions/|scripts/ci/dcu/|scripts/ci/utils/|python/pyproject.*\.toml|python/sglang/|test/run_suite\.py|python/sglang/test/ci/|test/registered/|sgl-kernel/)'; then
+            echo "dcu=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "dcu=false" >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Select DCU stages
         id: plan
