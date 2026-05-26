@@ -13,6 +13,7 @@ on:
       - ready_for_review
     branches:
       - main
+      - dcu-pr-flow-base
     paths:
       - ".github/workflows/pr-test-dcu.yml"
       - ".github/workflows/pr-gate.yml"
