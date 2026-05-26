@@ -11,6 +11,7 @@ class TestDCUStageBFlowA(CustomTestCase):
     """Flow-smoke test used to exercise DCU PR matrix routing."""
 
     def test_dcu_ci_env_marker(self):
+        # This assertion intentionally stays environment-only for PR flow testing.
         if os.environ.get("SGLANG_IS_IN_CI_DCU") != "1":
             self.skipTest("Not running inside DCU CI container; skipping marker check.")
         self.assertEqual(os.environ.get("SGLANG_IS_IN_CI"), "1")
