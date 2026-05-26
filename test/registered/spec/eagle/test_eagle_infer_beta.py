@@ -6,7 +6,7 @@ import requests
 
 from sglang.srt.environ import envs
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.few_shot_gsm8k import run_eval
 from sglang.test.kits.matched_stop_kit import MatchedStopMixin
 from sglang.test.kits.radix_cache_server_kit import run_radix_attention_test
@@ -20,6 +20,14 @@ from sglang.test.test_utils import (
 )
 
 register_cuda_ci(est_time=283, suite="stage-b-test-1-gpu-small")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    nightly=False,
+    disabled="DCU CSV CI placeholder: EAGLE beta speculative decoding path needs BW1000 validation before enabling.",
+)
 
 
 class TestEagleServerBase(CustomTestCase, MatchedStopMixin):

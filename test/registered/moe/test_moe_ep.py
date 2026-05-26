@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.run_eval import run_eval
 from sglang.test.test_utils import (
     DEFAULT_MLA_MODEL_NAME_FOR_TEST,
@@ -13,6 +13,14 @@ from sglang.test.test_utils import (
 )
 
 register_cuda_ci(est_time=140, suite="stage-b-test-2-gpu-large")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=300,
+    suite="nightly-dcu",
+    nightly=True,
+    disabled="DCU CSV CI placeholder: 2-GPU MoE EP path needs BW1000 multi-device validation before enabling.",
+)
 
 
 class TestEp(CustomTestCase):

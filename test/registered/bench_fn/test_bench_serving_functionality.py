@@ -9,13 +9,20 @@ from pathlib import Path
 from sglang.bench_serving import run_benchmark
 from sglang.benchmark.utils import parse_custom_headers
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
     get_benchmark_args,
+    is_in_dcu_ci,
     popen_launch_server,
+)
+
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
 )
 
 register_cuda_ci(est_time=300, suite="nightly-1-gpu", nightly=True)
@@ -26,6 +33,10 @@ NUM_CONVERSATIONS, NUM_TURNS = 4, 3
 
 
 class TestBenchServingFunctionality(CustomTestCase):
+    @unittest.skipIf(
+        is_in_dcu_ci(),
+        "DCU_CSV_NOT_APPLICABLE: GSP multi-turn benchmark still needs BW1000 local model mapping.",
+    )
     def test_gsp_multi_turn(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             process = popen_launch_server(

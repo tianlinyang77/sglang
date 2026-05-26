@@ -4,10 +4,16 @@ python3 -m unittest test_chunked_prefill.TestChunkedPrefill.test_mixed_chunked_p
 
 import unittest
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import CustomTestCase, run_mmlu_test, run_mulit_request_test
 
 register_cuda_ci(est_time=312, suite="stage-b-test-1-gpu-small")
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: scheduler path needs BW1000 repeat validation before required CI.",
+)
 register_amd_ci(est_time=312, suite="stage-b-test-1-gpu-small-amd")
 
 

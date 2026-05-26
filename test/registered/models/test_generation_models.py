@@ -1,6 +1,12 @@
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 
 # Generation model tests (CUDA only)
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: model matrix path needs local model mapping and BW1000 repeat validation.",
+)
 register_cuda_ci(est_time=103, suite="stage-b-test-1-gpu-large")
 register_amd_ci(est_time=106, suite="stage-b-test-1-gpu-small-amd")
 
@@ -42,7 +48,20 @@ from sglang.test.runners import (
     SRTRunner,
     check_close_model_outputs,
 )
-from sglang.test.test_utils import CustomTestCase, is_in_ci
+from sglang.test.test_utils import CustomTestCase, is_dcu, is_in_ci, is_in_dcu_ci
+
+DEFAULT_DCU_GENERATION_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
+DCU_GENERATION_MODEL_ENV = "SGLANG_DCU_GENERATION_MODEL"
+
+
+def _is_dcu_path():
+    return is_dcu() or is_in_dcu_ci()
+
+
+def _dcu_generation_model():
+    return os.environ.get(DCU_GENERATION_MODEL_ENV, DEFAULT_DCU_GENERATION_MODEL)
 
 
 @dataclasses.dataclass
@@ -58,10 +77,25 @@ class ModelCase:
 
 
 # Popular models that run on the CI
-CI_MODELS = [
-    ModelCase("meta-llama/Llama-3.1-8B-Instruct"),
-    ModelCase("google/gemma-2-2b", attention_backend="triton" if is_hip() else None),
-]
+CI_MODELS = (
+    [
+        ModelCase(
+            _dcu_generation_model(),
+            prefill_tolerance=2e-1,
+            decode_tolerance=2e-1,
+            rouge_l_tolerance=5e-1,
+            trust_remote_code=True,
+            attention_backend="fa3",
+        )
+    ]
+    if _is_dcu_path()
+    else [
+        ModelCase("meta-llama/Llama-3.1-8B-Instruct"),
+        ModelCase(
+            "google/gemma-2-2b", attention_backend="triton" if is_hip() else None
+        ),
+    ]
+)
 
 # the complete set of models to test sglang's generation model
 ALL_MODELS = [
@@ -161,6 +195,17 @@ class TestGenerationModels(CustomTestCase):
         ) as hf_runner:
             hf_outputs = hf_runner.forward(prompts, max_new_tokens=max_new_tokens)
 
+        dcu_runner_kwargs = {}
+        if _is_dcu_path():
+            dcu_runner_kwargs = {
+                "disable_cuda_graph": True,
+                "page_size": 64,
+                "context_length": 4096,
+                "max_total_tokens": 8192,
+                "chunked_prefill_size": 2048,
+                "mem_fraction_static": 0.55,
+            }
+
         with env_ctx, SRTRunner(
             model_path,
             tp_size=model_case.tp_size,
@@ -168,6 +213,7 @@ class TestGenerationModels(CustomTestCase):
             model_type="generation",
             trust_remote_code=model_case.trust_remote_code,
             attention_backend=model_case.attention_backend,
+            **dcu_runner_kwargs,
         ) as srt_runner:
             srt_outputs = srt_runner.forward(prompts, max_new_tokens=max_new_tokens)
 
@@ -184,7 +230,7 @@ class TestGenerationModels(CustomTestCase):
     def test_ci_models(self):
         for model_case in CI_MODELS:
             for torch_dtype in TORCH_DTYPES:
-                prompts = DEFAULT_PROMPTS
+                prompts = DEFAULT_PROMPTS[1:4] if _is_dcu_path() else DEFAULT_PROMPTS
 
                 # Skip long prompts for models that do not have a long context
                 if model_case.skip_long_prompt:

@@ -15,6 +15,7 @@ python3 -m unittest openai_server.basic.test_anthropic_server.TestAnthropicServe
 """
 
 import json
+import os
 import unittest
 
 import requests
@@ -22,23 +23,64 @@ import requests
 from sglang.srt.entrypoints.anthropic.protocol import AnthropicMessagesRequest
 from sglang.srt.entrypoints.anthropic.serving import AnthropicServing
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
 )
 
 register_cuda_ci(est_time=120, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=140, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=140,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: OpenAI server path needs BW1000 small-model repeat validation before required CI.",
+)
+
+DEFAULT_DCU_ANTHROPIC_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
 
 
 class TestAnthropicServer(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_ANTHROPIC_MODEL",
+                os.environ.get(
+                    "SGLANG_DCU_SERVER_SMOKE_MODEL", DEFAULT_DCU_ANTHROPIC_MODEL
+                ),
+            )
+            other_args = (
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "2048",
+                "--max-total-tokens",
+                "4096",
+                "--max-running-requests",
+                "8",
+                "--chunked-prefill-size",
+                "2048",
+            )
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+            }
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = None
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
         cls.process = popen_launch_server(
@@ -46,6 +88,8 @@ class TestAnthropicServer(CustomTestCase):
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             api_key=cls.api_key,
+            other_args=other_args,
+            env=env,
         )
         cls.messages_url = cls.base_url + "/v1/messages"
 
@@ -494,6 +538,12 @@ class TestAnthropicServer(CustomTestCase):
 
     def test_count_tokens_with_system(self):
         """Test count_tokens with system message."""
+        if is_dcu() or is_in_dcu_ci():
+            self.skipTest(
+                "DCU uses Qwen2.5 local model; its chat template can make the "
+                "system-prompt token count no larger than the no-system case."
+            )
+
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",

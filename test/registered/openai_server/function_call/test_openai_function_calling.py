@@ -1,21 +1,34 @@
 import json
+import os
 import unittest
 
 import openai
 
 from sglang.srt.utils import kill_process_tree
 from sglang.srt.utils.hf_transformers_utils import get_tokenizer
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
 )
 
 register_cuda_ci(est_time=60, suite="stage-b-test-1-gpu-large")
 register_amd_ci(est_time=73, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=73,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: OpenAI server path needs BW1000 small-model repeat validation before required CI.",
+)
+
+DEFAULT_DCU_FUNCTION_CALLING_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/vllm-optest-models/llama3.2/"
+    "Llama-3.2-1B-Instruct"
+)
 
 
 class TestOpenAIServerFunctionCalling(CustomTestCase):
@@ -36,7 +49,43 @@ class TestOpenAIServerFunctionCalling(CustomTestCase):
     @classmethod
     def setUpClass(cls):
         # Replace with the model name needed for testing; if not required, reuse DEFAULT_SMALL_MODEL_NAME_FOR_TEST
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_FUNCTION_CALLING_MODEL",
+                os.environ.get(
+                    "SGLANG_DCU_SERVER_SMOKE_MODEL",
+                    DEFAULT_DCU_FUNCTION_CALLING_MODEL,
+                ),
+            )
+            other_args = [
+                "--tool-call-parser",
+                "llama3",
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--disable-cuda-graph",
+                "--context-length",
+                "4096",
+                "--max-total-tokens",
+                "8192",
+                "--max-running-requests",
+                "8",
+                "--chunked-prefill-size",
+                "4096",
+            ]
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+            }
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = [
+                # If your server needs extra parameters to test function calling, please add them here.
+                "--tool-call-parser",
+                "llama3",
+            ]
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
 
@@ -46,11 +95,8 @@ class TestOpenAIServerFunctionCalling(CustomTestCase):
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             api_key=cls.api_key,
-            other_args=[
-                # If your server needs extra parameters to test function calling, please add them here.
-                "--tool-call-parser",
-                "llama3",
-            ],
+            other_args=other_args,
+            env=env,
         )
         cls.base_url += "/v1"
         cls.tokenizer = get_tokenizer(cls.model)
@@ -841,7 +887,42 @@ class TestOpenAIPythonicFunctionCalling(CustomTestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_FUNCTION_CALLING_MODEL",
+                os.environ.get(
+                    "SGLANG_DCU_SERVER_SMOKE_MODEL",
+                    DEFAULT_DCU_FUNCTION_CALLING_MODEL,
+                ),
+            )
+            other_args = [
+                "--tool-call-parser",
+                "pythonic",
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--disable-cuda-graph",
+                "--context-length",
+                "4096",
+                "--max-total-tokens",
+                "8192",
+                "--max-running-requests",
+                "8",
+                "--chunked-prefill-size",
+                "4096",
+            ]
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+            }
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = [
+                "--tool-call-parser",
+                "pythonic",
+            ]
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
         cls.process = popen_launch_server(
@@ -849,10 +930,8 @@ class TestOpenAIPythonicFunctionCalling(CustomTestCase):
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             api_key=cls.api_key,
-            other_args=[
-                "--tool-call-parser",
-                "pythonic",
-            ],
+            other_args=other_args,
+            env=env,
         )
         cls.base_url += "/v1"
         cls.tokenizer = get_tokenizer(cls.model)

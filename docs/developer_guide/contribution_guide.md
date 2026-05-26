@@ -128,12 +128,22 @@ For CI to run on a pull request, it must have the "run-ci" label. Authorized use
 - `/rerun-failed-ci`: Reruns the failed or flaky tests from the most recent commit.
 - `/tag-and-rerun-ci`: A single command that performs both `/tag-run-ci-label` and `/rerun-failed-ci`.
 - `/rerun-stage <stage-name>`: Reruns a specific test stage without waiting for its dependencies. This is useful when you want to quickly validate a fix for a specific test failure instead of waiting ~30 minutes for preceding stages to complete.
+- `/rerun-ut <test-file>[::<test-selector>]`: Reruns one registered CUDA or DCU unit test file, class, or method on the matching runner.
 
 If you have permission, the [Slash Command Handler](https://github.com/sgl-project/sglang/actions/workflows/slash-command-handler.yml) will run your command and react with a 👍 to your comment. It may take up to a few minutes for the reaction to appear. Here’s a usage [example](https://github.com/sgl-project/sglang/pull/14253#issuecomment-3599509302).
 
 To avoid spamming a PR with too many `/rerun-failed-ci` comments, you can also trigger the command by editing an existing comment and adding any suffix (e.g., `/rerun-failed-ci try again`).
 
-Example of rerunning a single test stage: `/rerun-stage unit-test-backend-4-gpu`.
+Examples of rerunning a single test stage:
+
+- NVIDIA/CUDA: `/rerun-stage stage-b-test-1-gpu-small`
+- AMD: `/rerun-stage stage-b-test-1-gpu-small-amd`
+- DCU: `/rerun-stage stage-a-dcu` or `/rerun-stage stage-b-dcu`
+
+Examples of rerunning a single registered test:
+
+- CUDA: `/rerun-ut test/registered/core/test_srt_endpoint.py::TestSRTEndpoint.test_simple_decode`
+- DCU: `/rerun-ut test/registered/dcu/interface/test_dcu_smoke.py::TestDCUSmoke.test_import_sglang`
 
 If you don’t have permission and you’re not the PR author, please ask maintainers to trigger CI for you.
 

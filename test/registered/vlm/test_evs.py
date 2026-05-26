@@ -3,11 +3,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import run_doctests
 
 register_cuda_ci(est_time=20, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=20, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=20,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: VLM path needs local VLM model mapping and dedicated BW1000 validation.",
+)
 
 
 def test_resolve_evs_config():

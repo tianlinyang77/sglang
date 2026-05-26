@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import requests
 
 from sglang.srt.utils import is_cuda, is_hip, kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -13,6 +13,12 @@ from sglang.test.test_utils import (
     CustomTestCase,
     is_in_ci,
     popen_launch_server,
+)
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: MLA path needs BW1000 numeric/backend validation before required CI.",
 )
 
 # DeepSeek-V3 MLA tests with torch compile, FA3, and MTP speculative decoding

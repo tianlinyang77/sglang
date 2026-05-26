@@ -1,0 +1,75 @@
+name: Nightly Test (DCU)
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_filter:
+        description: 'Select which job to run'
+        required: false
+        type: choice
+        default: 'all'
+        options:
+          - 'all'
+          - dcu-stage-b
+          - dcu-nightly
+      runner_label:
+        description: 'DCU runner label'
+        required: true
+        type: string
+      image:
+        description: 'DCU CI container image'
+        required: true
+        type: string
+      continue_on_error:
+        description: 'Continue on error'
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: nightly-test-dcu-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SGLANG_IS_IN_CI: true
+  SGLANG_IS_IN_CI_DCU: true
+  DCU_CI_IMAGE: ${{ inputs.image }}
+
+jobs:
+  dcu-stage-b:
+    if: inputs.job_filter == 'all' || inputs.job_filter == 'dcu-stage-b'
+    runs-on: ${{ inputs.runner_label }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup DCU container
+        run: bash scripts/ci/dcu/dcu_ci_start_container.sh --image "${{ inputs.image }}"
+
+      - name: Install dependencies
+        run: bash scripts/ci/dcu/dcu_ci_install_dependency.sh
+
+      - name: Run DCU stage-b suite
+        timeout-minutes: 180
+        run: |
+          bash scripts/ci/dcu/dcu_ci_exec.sh -w /sglang-checkout/test \
+            python3 run_suite.py --hw dcu --suite stage-b-dcu --timeout-per-file 900 ${{ inputs.continue_on_error && '--continue-on-error' || '' }}
+
+  dcu-nightly:
+    if: inputs.job_filter == 'all' || inputs.job_filter == 'dcu-nightly'
+    runs-on: ${{ inputs.runner_label }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup DCU container
+        run: bash scripts/ci/dcu/dcu_ci_start_container.sh --image "${{ inputs.image }}"
+
+      - name: Install dependencies
+        run: bash scripts/ci/dcu/dcu_ci_install_dependency.sh
+
+      - name: Run DCU nightly suite
+        timeout-minutes: 240
+        run: |
+          bash scripts/ci/dcu/dcu_ci_exec.sh -w /sglang-checkout/test \
+            python3 run_suite.py --hw dcu --suite nightly-dcu --nightly --timeout-per-file 1800 ${{ inputs.continue_on_error && '--continue-on-error' || '' }}

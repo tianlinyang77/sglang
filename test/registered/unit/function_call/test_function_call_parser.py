@@ -16,9 +16,12 @@ from sglang.srt.function_call.llama32_detector import Llama32Detector
 from sglang.srt.function_call.mistral_detector import MistralDetector
 from sglang.srt.function_call.pythonic_detector import PythonicDetector
 from sglang.srt.function_call.qwen3_coder_detector import Qwen3CoderDetector
-from sglang.test.ci.ci_register import register_cpu_ci
+from sglang.test.ci.ci_register import register_cpu_ci, register_dcu_ci
 
 register_cpu_ci(1.0, "stage-a-test-cpu")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(est_time=30, suite="stage-b-dcu", disabled="DCU PR baseline deferred: test is registered for DCU coverage but lacks three-pass BW1000 PR-gate repeat evidence.")
 
 
 class TestPythonicDetector(unittest.TestCase):

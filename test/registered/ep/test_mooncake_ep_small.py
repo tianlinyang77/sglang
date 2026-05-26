@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.test.server_fixtures.disaggregation_fixture import get_rdma_devices_args
 from sglang.test.test_utils import (
@@ -16,6 +16,14 @@ from sglang.test.test_utils import (
 )
 
 register_cuda_ci(est_time=660, suite="stage-c-test-deepep-4-gpu-h100")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=660,
+    suite="nightly-dcu",
+    nightly=True,
+    disabled="DCU CSV CI placeholder: Mooncake EP path needs BW1000 multi-device validation before enabling.",
+)
 
 ib_devices = get_rdma_devices_args()
 

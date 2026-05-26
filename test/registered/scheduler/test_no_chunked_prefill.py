@@ -1,11 +1,17 @@
 import unittest
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_MODEL_NAME_FOR_TEST,
     CustomTestCase,
     run_bench_serving,
     run_mmlu_test,
+)
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: scheduler path needs BW1000 repeat validation before required CI.",
 )
 
 register_cuda_ci(est_time=108, suite="stage-b-test-1-gpu-large")

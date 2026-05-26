@@ -22,14 +22,34 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import sglang as sgl
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
-from sglang.test.test_utils import DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
+from sglang.test.test_utils import (
+    DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
+    is_dcu,
+    is_in_dcu_ci,
+)
 
 register_cuda_ci(est_time=41, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=60, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=60,
+    suite="stage-b-dcu",
+)
 
 # ------------------------- Configurable via env ------------------------- #
-MODEL_ID = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+DEFAULT_DCU_ORIGINAL_LOGPROBS_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
+MODEL_ID = (
+    os.environ.get(
+        "SGLANG_DCU_ORIGINAL_LOGPROBS_MODEL",
+        os.environ.get(
+            "SGLANG_DCU_SERVER_SMOKE_MODEL", DEFAULT_DCU_ORIGINAL_LOGPROBS_MODEL
+        ),
+    )
+    if is_dcu() or is_in_dcu_ci()
+    else DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+)
 PROMPTS = [
     "Hello, my name is",
     "The future of AI is",
@@ -47,6 +67,10 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed_all(1234)
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
+
+if is_dcu() or is_in_dcu_ci():
+    os.environ.setdefault("SGLANG_USE_MODELSCOPE", "1")
+    os.environ.setdefault("SGLANG_USE_LIGHTOP", "1")
 
 
 class TestOriginalLogprob(unittest.TestCase):
@@ -137,6 +161,19 @@ class TestOriginalLogprob(unittest.TestCase):
                     skip_tokenizer_init=True,
                     trust_remote_code=True,
                     mem_fraction_static=0.60,
+                    **(
+                        {
+                            "attention_backend": "fa3",
+                            "page_size": 64,
+                            "disable_cuda_graph": True,
+                            "context_length": 2048,
+                            "max_total_tokens": 4096,
+                            "max_running_requests": 8,
+                            "chunked_prefill_size": 2048,
+                        }
+                        if is_dcu() or is_in_dcu_ci()
+                        else {}
+                    ),
                 )
 
                 for prompt in PROMPTS:

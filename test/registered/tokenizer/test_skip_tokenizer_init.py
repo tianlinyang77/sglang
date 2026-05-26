@@ -4,6 +4,7 @@ python3 -m unittest test_skip_tokenizer_init.TestSkipTokenizerInit.run_decode_st
 """
 
 import json
+import os
 import unittest
 
 import requests
@@ -11,7 +12,7 @@ from transformers import AutoProcessor, AutoTokenizer
 
 from sglang.lang.chat_template import get_chat_template_by_model_path
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_IMAGE_URL,
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
@@ -20,28 +21,71 @@ from sglang.test.test_utils import (
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
     download_image_with_retry,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
 )
 
 register_cuda_ci(est_time=77, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=117, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=117,
+    suite="stage-b-dcu",
+)
+
+DEFAULT_DCU_SKIP_TOKENIZER_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
 
 
 class TestSkipTokenizerInit(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_SKIP_TOKENIZER_MODEL",
+                os.environ.get(
+                    "SGLANG_DCU_SERVER_SMOKE_MODEL",
+                    DEFAULT_DCU_SKIP_TOKENIZER_MODEL,
+                ),
+            )
+            other_args = [
+                "--skip-tokenizer-init",
+                "--incremental-streaming-output",
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "2048",
+                "--max-total-tokens",
+                "4096",
+                "--max-running-requests",
+                "8",
+                "--chunked-prefill-size",
+                "2048",
+            ]
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+                **os.environ,
+            }
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = ["--skip-tokenizer-init", "--incremental-streaming-output"]
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            other_args=["--skip-tokenizer-init", "--incremental-streaming-output"],
+            other_args=other_args,
+            env=env,
         )
-        cls.eos_token_id = [119690]
-        cls.tokenizer = AutoTokenizer.from_pretrained(
-            DEFAULT_SMALL_MODEL_NAME_FOR_TEST, use_fast=False
-        )
+        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model, use_fast=False)
+        cls.eos_token_id = [cls.tokenizer.eos_token_id]
 
     @classmethod
     def tearDownClass(cls):
@@ -206,6 +250,9 @@ class TestSkipTokenizerInit(CustomTestCase):
 class TestSkipTokenizerInitVLM(TestSkipTokenizerInit):
     @classmethod
     def setUpClass(cls):
+        if is_dcu() or is_in_dcu_ci():
+            raise unittest.SkipTest("DCU VLM skip-tokenizer-init path needs local VLM model mapping.")
+
         cls.image_url = DEFAULT_IMAGE_URL
         cls.image = download_image_with_retry(cls.image_url)
         cls.model = DEFAULT_SMALL_VLM_MODEL_NAME_FOR_TEST

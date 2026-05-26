@@ -5,7 +5,7 @@ import requests
 
 from sglang.srt.environ import envs
 from sglang.srt.utils import get_device_sm, kill_process_tree
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.test.test_utils import (
     DEFAULT_DRAFT_MODEL_EAGLE3,
@@ -21,6 +21,14 @@ from sglang.test.test_utils import (
 # FlashAttention3 integration tests (requires SM 90+ / H100)
 # Multiple test classes: FA3, FA3+MLA, FA3+SpecDecode variants
 register_cuda_ci(est_time=300, suite="stage-b-test-1-gpu-large")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    nightly=False,
+    disabled="DCU CSV CI placeholder: FA3 attention path needs BW1000 backend validation before enabling.",
+)
 
 GSM_DATASET_PATH = None
 

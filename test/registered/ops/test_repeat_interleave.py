@@ -6,13 +6,14 @@ import pytest
 import torch
 
 from sglang.srt.models.utils import compute_cu_seqlens_from_grid_numpy as cpu_numpy_impl
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 
 # Ops - Repeat Interleave tests (1-GPU)
 
 
 register_cuda_ci(est_time=8, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=75, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(est_time=75, suite="stage-b-dcu")
 
 
 def torch_ref_impl(grid_thw: torch.Tensor) -> torch.Tensor:
@@ -62,9 +63,11 @@ def _generate_random_grid(T: int, repeat_min: int, repeat_max: int) -> torch.Ten
     col0: repeat count
     col1, col2: arbitrary positive integers (here 1..16)
     """
-    repeats = torch.randint(repeat_min, repeat_max + 1, (T, 1), dtype=torch.int32)
-    th = torch.randint(1, 17, (T, 1), dtype=torch.int32)
-    tw = torch.randint(1, 17, (T, 1), dtype=torch.int32)
+    repeats = torch.randint(
+        repeat_min, repeat_max + 1, (T, 1), dtype=torch.int32, device="cpu"
+    )
+    th = torch.randint(1, 17, (T, 1), dtype=torch.int32, device="cpu")
+    tw = torch.randint(1, 17, (T, 1), dtype=torch.int32, device="cpu")
     grid_thw = torch.cat([repeats, th, tw], dim=1)
     return grid_thw
 
@@ -132,6 +135,7 @@ class TestRepeatInterleave:
                 [0, 7, 7],  # 0
             ],
             dtype=torch.int32,
+            device="cpu",
         )
 
         grid_clone = grid_thw.clone()

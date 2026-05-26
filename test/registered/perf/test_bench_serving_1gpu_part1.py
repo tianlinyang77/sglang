@@ -5,26 +5,73 @@ Works on 5090 (32GB).
 
 import asyncio
 import itertools
+import os
 import unittest
 
 import requests
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_MODEL_NAME_FOR_TEST,
     CustomTestCase,
     is_in_amd_ci,
     is_in_ci,
+    is_in_dcu_ci,
     run_bench_serving,
     write_github_step_summary,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: performance path needs BW1000 baseline and thresholds before required CI.",
 )
 
 register_cuda_ci(est_time=1000, suite="stage-b-test-1-gpu-large")
 register_amd_ci(est_time=1100, suite="stage-b-test-1-gpu-large-amd")
 
+DCU_MODEL = os.environ.get(
+    "SGLANG_DCU_SMALL_MODEL",
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct",
+)
+
+
+def _dcu_server_args(extra_args=None):
+    args = [
+        "--attention-backend",
+        "fa3",
+        "--page-size",
+        "64",
+        "--disable-cuda-graph",
+        "--context-length",
+        "4096",
+        "--max-total-tokens",
+        "8192",
+        "--max-running-requests",
+        "8",
+    ]
+    if extra_args:
+        args.extend(extra_args)
+    return args
+
+
+def _dcu_run_bench(num_prompts, request_rate, extra_server_args=None):
+    return run_bench_serving(
+        model=DCU_MODEL,
+        num_prompts=num_prompts,
+        request_rate=request_rate,
+        other_server_args=_dcu_server_args(extra_server_args),
+        random_input_len=128,
+        random_output_len=64,
+    )
+
 
 class TestBenchServing1GPUPart1(CustomTestCase):
     def test_offline_throughput_default(self):
+        if is_in_dcu_ci():
+            res = _dcu_run_bench(num_prompts=20, request_rate=float("inf"))
+            self.assertGreater(res["output_throughput"], 0)
+            return
+
         res = run_bench_serving(
             model=DEFAULT_MODEL_NAME_FOR_TEST,
             num_prompts=500,
@@ -43,6 +90,9 @@ class TestBenchServing1GPUPart1(CustomTestCase):
                 self.assertGreater(res["output_throughput"], 3800)
 
     def test_offline_throughput_non_stream_small_batch_size(self):
+        if is_in_dcu_ci():
+            self.skipTest("DCU quick pass keeps ShareGPT/non-stream throughput in the perf specialty track.")
+
         res = run_bench_serving(
             model=DEFAULT_MODEL_NAME_FOR_TEST,
             num_prompts=200,
@@ -66,6 +116,15 @@ class TestBenchServing1GPUPart1(CustomTestCase):
                 self.assertGreater(res["output_throughput"], 1050)
 
     def test_offline_throughput_without_radix_cache(self):
+        if is_in_dcu_ci():
+            res = _dcu_run_bench(
+                num_prompts=20,
+                request_rate=float("inf"),
+                extra_server_args=["--disable-radix-cache"],
+            )
+            self.assertGreater(res["output_throughput"], 0)
+            return
+
         res = run_bench_serving(
             model=DEFAULT_MODEL_NAME_FOR_TEST,
             num_prompts=500,
@@ -84,6 +143,15 @@ class TestBenchServing1GPUPart1(CustomTestCase):
                 self.assertGreater(res["output_throughput"], 3800)
 
     def test_offline_throughput_without_chunked_prefill(self):
+        if is_in_dcu_ci():
+            res = _dcu_run_bench(
+                num_prompts=20,
+                request_rate=float("inf"),
+                extra_server_args=["--chunked-prefill-size", "-1"],
+            )
+            self.assertGreater(res["output_throughput"], 0)
+            return
+
         res = run_bench_serving(
             model=DEFAULT_MODEL_NAME_FOR_TEST,
             num_prompts=500,
@@ -99,6 +167,9 @@ class TestBenchServing1GPUPart1(CustomTestCase):
             self.assertGreater(res["output_throughput"], 2600)
 
     def test_offline_throughput_with_triton_attention_backend(self):
+        if is_in_dcu_ci():
+            self.skipTest("DCU quick pass validates fa3; Triton backend stays in the attention/perf specialty track.")
+
         res = run_bench_serving(
             model=DEFAULT_MODEL_NAME_FOR_TEST,
             num_prompts=500,
@@ -122,6 +193,13 @@ class TestBenchServing1GPUPart1(CustomTestCase):
                 self.assertGreater(res["output_throughput"], 3700)
 
     def test_online_latency_default(self):
+        if is_in_dcu_ci():
+            res = _dcu_run_bench(num_prompts=10, request_rate=1)
+            self.assertGreater(res["median_e2e_latency_ms"], 0)
+            self.assertGreater(res["median_ttft_ms"], 0)
+            self.assertGreater(res["median_itl_ms"], 0)
+            return
+
         res = run_bench_serving(
             model=DEFAULT_MODEL_NAME_FOR_TEST,
             num_prompts=100,
@@ -142,6 +220,9 @@ class TestBenchServing1GPUPart1(CustomTestCase):
             self.assertLess(res["median_itl_ms"], 10)
 
     def test_lora_online_latency(self):
+        if is_in_dcu_ci():
+            self.skipTest("DCU quick pass keeps LoRA latency in the LoRA/perf specialty track.")
+
         if is_in_amd_ci():
             pass
 
@@ -157,6 +238,9 @@ class TestBenchServing1GPUPart1(CustomTestCase):
             self.assertLess(res["median_ttft_ms"], 58)
 
     def test_lora_online_latency_with_concurrent_adapter_updates(self):
+        if is_in_dcu_ci():
+            self.skipTest("DCU quick pass keeps LoRA adapter update latency in the LoRA/perf specialty track.")
+
         if is_in_amd_ci():
             pass
 

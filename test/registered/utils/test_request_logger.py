@@ -9,21 +9,27 @@ from pathlib import Path
 import requests
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
 )
 
 register_cuda_ci(est_time=120, suite="nightly-1-gpu", nightly=True)
 register_amd_ci(est_time=120, suite="nightly-amd-1-gpu", nightly=True)
+register_dcu_ci(est_time=120, suite="stage-b-dcu")
 
 TEST_ROUTING_KEY = "test-routing-key-12345"
 TEST_CUSTOM_HEADER_NAME = "X-Test-Header"
 TEST_CUSTOM_HEADER_VALUE = "test-header-value-67890"
 TEST_MODEL_NAME = "Qwen/Qwen3-0.6B"
+DEFAULT_DCU_REQUEST_LOGGER_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
 
 
 class BaseTestRequestLogger:
@@ -33,6 +39,8 @@ class BaseTestRequestLogger:
 
     @classmethod
     def setUpClass(cls):
+        use_dcu_config = is_dcu() or is_in_dcu_ci()
+        cls.model = DEFAULT_DCU_REQUEST_LOGGER_MODEL if use_dcu_config else TEST_MODEL_NAME
         cls._temp_dir_obj = tempfile.TemporaryDirectory()
         cls.temp_dir = cls._temp_dir_obj.name
         cls.stdout = io.StringIO()
@@ -48,14 +56,41 @@ class BaseTestRequestLogger:
             "stdout",
             cls.temp_dir,
         ]
+        if use_dcu_config:
+            other_args.extend(
+                [
+                    "--attention-backend",
+                    "fa3",
+                    "--page-size",
+                    "64",
+                    "--trust-remote-code",
+                    "--disable-cuda-graph",
+                    "--context-length",
+                    "2048",
+                    "--max-total-tokens",
+                    "4096",
+                    "--max-running-requests",
+                    "8",
+                    "--chunked-prefill-size",
+                    "2048",
+                ]
+            )
+
         # Set env vars and save old values for restoration
         cls._old_env_vars = {}
         for key, value in cls.env_vars.items():
             cls._old_env_vars[key] = os.environ.get(key)
             os.environ[key] = value
+        if use_dcu_config:
+            for key, value in {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+            }.items():
+                cls._old_env_vars[key] = os.environ.get(key)
+                os.environ[key] = value
 
         cls.process = popen_launch_server(
-            TEST_MODEL_NAME,
+            cls.model,
             DEFAULT_URL_FOR_TEST,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=other_args,
@@ -133,7 +168,7 @@ class BaseTestRequestLogger:
         response = requests.post(
             DEFAULT_URL_FOR_TEST + "/v1/chat/completions",
             json={
-                "model": TEST_MODEL_NAME,
+                "model": self.model,
                 "messages": [{"role": "user", "content": "hello request logger"}],
                 "max_tokens": 8,
                 "temperature": 0,
@@ -236,7 +271,7 @@ class TestRequestLoggerJson(BaseTestRequestLogger, CustomTestCase):
                 continue
 
             obj = data.get("obj", {})
-            self.assertEqual(obj.get("model"), TEST_MODEL_NAME)
+            self.assertEqual(obj.get("model"), self.model)
             self.assertIsInstance(obj.get("messages"), list)
             self.assertGreater(len(obj.get("messages")), 0)
             self.assertEqual(obj["messages"][0].get("content"), "hello request logger")

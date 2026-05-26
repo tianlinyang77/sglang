@@ -18,7 +18,7 @@ from transformers import (
     Qwen2_5_VLForConditionalGeneration,
 )
 
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 
 if not hasattr(_hf_activations, "PytorchGELUTanh"):
 
@@ -38,6 +38,14 @@ from sglang.srt.parser.conversation import generate_chat_conv
 from sglang.srt.utils.hf_transformers_utils import _fix_added_tokens_encoding
 
 register_cuda_ci(est_time=447, suite="stage-b-test-1-gpu-large")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    nightly=False,
+    disabled="DCU CSV CI placeholder: VLM input-format path needs local VLM model mapping before enabling.",
+)
 
 IMAGE_MAN_IRONING_URL = "https://raw.githubusercontent.com/sgl-project/sgl-test-files/refs/heads/main/images/man_ironing_on_back_of_suv.png"
 IMAGE_SGL_LOGO_URL = "https://raw.githubusercontent.com/sgl-project/sgl-test-files/refs/heads/main/images/sgl_logo.png"

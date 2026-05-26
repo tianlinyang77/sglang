@@ -7,31 +7,76 @@ import requests
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: embedding path needs local model mapping and BW1000 repeat validation before required CI.",
 )
 
 register_cuda_ci(est_time=38, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=38, suite="stage-b-test-1-gpu-small-amd")
 
+DEFAULT_DCU_INPUT_EMBEDDING_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
+
 
 class TestInputEmbeds(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_INPUT_EMBEDDING_MODEL",
+                DEFAULT_DCU_INPUT_EMBEDDING_MODEL,
+            )
+            other_args = (
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "2048",
+                "--max-total-tokens",
+                "4096",
+                "--max-running-requests",
+                "8",
+                "--chunked-prefill-size",
+                "2048",
+            )
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+                **os.environ,
+            }
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = ["--disable-radix", "--cuda-graph-max-bs", 4]
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
-        cls.tokenizer = AutoTokenizer.from_pretrained(cls.model)
-        cls.ref_model = AutoModelForCausalLM.from_pretrained(cls.model)
+        cls.tokenizer = AutoTokenizer.from_pretrained(
+            cls.model, trust_remote_code=True
+        )
+        cls.ref_model = AutoModelForCausalLM.from_pretrained(
+            cls.model, trust_remote_code=True
+        )
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            other_args=["--disable-radix", "--cuda-graph-max-bs", 4],
+            other_args=other_args,
+            env=env,
         )
         cls.texts = [
             "The capital of France is",

@@ -4,9 +4,12 @@ from sglang.srt.observability.utils import (
     generate_buckets,
     two_sides_exponential_buckets,
 )
-from sglang.test.ci.ci_register import register_cpu_ci
+from sglang.test.ci.ci_register import register_cpu_ci, register_dcu_ci
 
 register_cpu_ci(est_time=1, suite="stage-a-test-cpu")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(est_time=30, suite="stage-b-dcu", disabled="DCU PR baseline deferred: test is registered for DCU coverage but lacks three-pass BW1000 PR-gate repeat evidence.")
 
 
 class TestMetricsUtils(unittest.TestCase):

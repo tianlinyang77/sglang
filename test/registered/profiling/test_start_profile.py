@@ -20,19 +20,28 @@ import requests
 
 from sglang.srt.environ import envs
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
 )
 
 register_cuda_ci(est_time=41, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=60, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=60,
+    suite="stage-b-dcu",
+)
 
 OUTPUT_DIR = "./profiler_dir"
+DEFAULT_DCU_START_PROFILE_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
 
 
 def _is_nsys_available():
@@ -49,17 +58,51 @@ class TestStartProfile(CustomTestCase):
     @classmethod
     def setUpClass(cls):
         envs.SGLANG_TORCH_PROFILER_DIR.set(OUTPUT_DIR)
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_START_PROFILE_MODEL",
+                os.environ.get(
+                    "SGLANG_DCU_SERVER_SMOKE_MODEL", DEFAULT_DCU_START_PROFILE_MODEL
+                ),
+            )
+            other_args = [
+                "--max-running-requests",
+                "8",
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "2048",
+                "--max-total-tokens",
+                "4096",
+                "--chunked-prefill-size",
+                "2048",
+            ]
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+            }
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = None
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            other_args=other_args,
+            env=env,
         )
 
     @classmethod
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
+        if os.path.isdir(OUTPUT_DIR):
+            shutil.rmtree(OUTPUT_DIR)
 
     def setUp(self):
         self._clear_profile_dir()
@@ -142,6 +185,8 @@ class TestStartProfileWithNsys(CustomTestCase):
 
     @classmethod
     def setUpClass(cls):
+        if is_dcu() or is_in_dcu_ci():
+            raise unittest.SkipTest("nsys CUDA profiler path is not part of DCU CI")
         if not _is_nsys_available():
             raise unittest.SkipTest("nsys (Nsight Systems) is not available")
 

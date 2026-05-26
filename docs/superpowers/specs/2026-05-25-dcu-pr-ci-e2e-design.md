@@ -259,4 +259,3 @@ The implementation phase should record these six evidence items:
 - Evidence links are collected for every validation item above.
 - Slash commands, nightly automation, and disabled test convergence remain out
   of scope for this phase.
-

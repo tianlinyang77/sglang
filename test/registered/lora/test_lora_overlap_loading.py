@@ -22,12 +22,17 @@ from torch.cuda import Stream as CudaStream
 
 from sglang.srt.lora.lora_manager import LoRAManager
 from sglang.srt.lora.lora_overlap_loader import LoRAOverlapLoader, LoRAOverlapLoadStatus
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.lora_utils import (
     CI_MULTI_LORA_MODELS,
     run_lora_batch_splitting_equivalence_test,
 )
-from sglang.test.test_utils import CustomTestCase
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
+)
+from sglang.test.test_utils import CustomTestCase, is_in_dcu_ci
 
 register_cuda_ci(est_time=75, suite="stage-b-test-1-gpu-large")
 register_amd_ci(est_time=75, suite="stage-b-test-1-gpu-small-amd")
@@ -35,6 +40,8 @@ register_amd_ci(est_time=75, suite="stage-b-test-1-gpu-small-amd")
 
 class TestLoRAOverlapLoading(CustomTestCase):
     def test_ci_lora_models_batch_splitting(self):
+        if is_in_dcu_ci():
+            self.skipTest("DCU quick framework covers LoRA overlap loader unit tests; model matrix needs LoRA专项 validation.")
         run_lora_batch_splitting_equivalence_test(
             CI_MULTI_LORA_MODELS, enable_lora_overlap_loading=True
         )

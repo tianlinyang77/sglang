@@ -12,7 +12,7 @@ import unittest
 import requests
 from test_hicache_storage_file_backend import HiCacheStorageBaseMixin
 
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_MLA_MODEL_NAME_FOR_TEST,
     CustomTestCase,
@@ -21,6 +21,14 @@ from sglang.test.test_utils import (
 )
 
 register_cuda_ci(est_time=300, suite="stage-b-test-2-gpu-large")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=300,
+    suite="nightly-dcu",
+    nightly=True,
+    disabled="DCU CSV CI placeholder: Mooncake HiCache backend needs storage/runtime validation before enabling.",
+)
 
 
 class HiCacheStorageMooncakeBackendBaseMixin(HiCacheStorageBaseMixin):

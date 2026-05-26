@@ -1,7 +1,8 @@
 import unittest
+import os
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.kits.ebnf_constrained_kit import EBNFConstrainedMixin
 from sglang.test.kits.json_constrained_kit import JSONConstrainedMixin
 from sglang.test.kits.regex_constrained_kit import RegexConstrainedMixin
@@ -10,11 +11,21 @@ from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
 )
 
 register_cuda_ci(est_time=111, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=179, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=179,
+    suite="stage-b-dcu",
+)
+
+DEFAULT_DCU_CONSTRAINED_DECODING_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
 
 
 class ServerWithGrammar(CustomTestCase):
@@ -23,7 +34,16 @@ class ServerWithGrammar(CustomTestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_CONSTRAINED_DECODING_MODEL",
+                os.environ.get(
+                    "SGLANG_DCU_SERVER_SMOKE_MODEL",
+                    DEFAULT_DCU_CONSTRAINED_DECODING_MODEL,
+                ),
+            )
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
         cls.base_url = DEFAULT_URL_FOR_TEST
         launch_args = [
             "--max-running-requests",
@@ -31,6 +51,28 @@ class ServerWithGrammar(CustomTestCase):
             "--grammar-backend",
             cls.backend,
         ]
+
+        env = None
+        if is_dcu() or is_in_dcu_ci():
+            launch_args += [
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "2048",
+                "--max-total-tokens",
+                "4096",
+                "--chunked-prefill-size",
+                "2048",
+            ]
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+                **os.environ,
+            }
 
         if cls.disable_overlap:
             launch_args += ["--disable-overlap-schedule"]
@@ -40,6 +82,7 @@ class ServerWithGrammar(CustomTestCase):
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=launch_args,
+            env=env,
         )
 
     @classmethod

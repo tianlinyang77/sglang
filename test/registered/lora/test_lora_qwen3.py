@@ -15,10 +15,16 @@
 import multiprocessing as mp
 import unittest
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.lora_utils import (
     LORA_MODELS_QWEN3,
     run_lora_multiple_batch_on_model_cases,
+)
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
 )
 from sglang.test.test_utils import CustomTestCase
 

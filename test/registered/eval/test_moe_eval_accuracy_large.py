@@ -7,7 +7,7 @@ import os
 import unittest
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.kits.eval_accuracy_kit import HumanEvalMixin, MGSMEnMixin, MMLUMixin
 from sglang.test.test_utils import (
     DEFAULT_MOE_MODEL_NAME_FOR_TEST,
@@ -16,6 +16,12 @@ from sglang.test.test_utils import (
     CustomTestCase,
     is_in_amd_ci,
     popen_launch_server,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
+    disabled="DCU accuracy registration placeholder; needs BW1000 accuracy baseline, thresholds, and local dataset/model paths.",
 )
 
 register_cuda_ci(est_time=500, suite="stage-b-test-2-gpu-large")

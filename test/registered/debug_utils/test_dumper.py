@@ -34,13 +34,20 @@ from sglang.srt.debug_utils.dumper import (
 )
 from sglang.srt.environ import temp_set_env
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     find_available_port,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
     run_distributed_test,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
 )
 
 register_cuda_ci(est_time=30, suite="nightly-2-gpu", nightly=True)
@@ -1346,6 +1353,11 @@ class TestDumperHttp:
                 stop_event.set()
                 thread.join(timeout=10)
         else:
+            if is_dcu() or is_in_dcu_ci():
+                pytest.skip(
+                    "DCU quick framework enables standalone dumper HTTP coverage; "
+                    "SGLang dumper HTTP server path needs separate Qwen local mapping."
+                )
             base_url = DEFAULT_URL_FOR_TEST
             env = {**os.environ, "DUMPER_SERVER_PORT": "reuse"}
             proc = popen_launch_server(
@@ -2001,6 +2013,13 @@ class TestNonIntrusiveLayerIdCtx(_NonIntrusiveTestBase):
         assert len(layer1_keys) == 0, f"layer 1 dumps should be filtered: {layer1_keys}"
 
 
+@pytest.mark.skipif(
+    is_dcu() or is_in_dcu_ci(),
+    reason=(
+        "DCU quick framework keeps Qwen TP=2 dumper E2E disabled; "
+        "server path needs separate local model/backend tuning."
+    ),
+)
 class TestDumperE2E:
     def test_step_and_non_intrusive_hooks(self, tmp_path):
         base_url = DEFAULT_URL_FOR_TEST

@@ -1,4 +1,5 @@
 import json
+import os
 import random
 import time
 import unittest
@@ -8,14 +9,21 @@ import requests
 
 import sglang as sgl
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
     is_in_ci,
+    is_in_dcu_ci,
     popen_launch_server,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: RL runtime path needs BW1000 memory/model validation before required CI.",
 )
 
 register_amd_ci(
@@ -23,15 +31,76 @@ register_amd_ci(
 )
 register_cuda_ci(est_time=210, suite="stage-b-test-1-gpu-large", disabled="see #14021")
 
+DEFAULT_DCU_UPDATE_WEIGHTS_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
+
+
+def _is_dcu_path():
+    return is_dcu() or is_in_dcu_ci()
+
+
+def _dcu_model_path():
+    return os.environ.get(
+        "SGLANG_DCU_UPDATE_WEIGHTS_MODEL", DEFAULT_DCU_UPDATE_WEIGHTS_MODEL
+    )
+
+
+def _dcu_engine_kwargs():
+    if not _is_dcu_path():
+        return {}
+    return {
+        "attention_backend": "fa3",
+        "page_size": 64,
+        "trust_remote_code": True,
+        "disable_cuda_graph": True,
+        "context_length": 2048,
+        "max_total_tokens": 4096,
+        "max_running_requests": 8,
+        "chunked_prefill_size": 2048,
+    }
+
+
+def _dcu_server_args(*extra_args):
+    if not _is_dcu_path():
+        return list(extra_args)
+    return [
+        "--attention-backend",
+        "fa3",
+        "--page-size",
+        "64",
+        "--trust-remote-code",
+        "--disable-cuda-graph",
+        "--context-length",
+        "2048",
+        "--max-total-tokens",
+        "4096",
+        "--max-running-requests",
+        "8",
+        "--chunked-prefill-size",
+        "2048",
+        *extra_args,
+    ]
+
+
+def _dcu_env():
+    if not _is_dcu_path():
+        return None
+    return {
+        "SGLANG_USE_MODELSCOPE": "1",
+        "SGLANG_USE_LIGHTOP": "1",
+        **os.environ,
+    }
+
 
 ###############################################################################
 # Engine Mode Tests (Single-configuration)
 ###############################################################################
 class TestEngineUpdateWeightsFromDisk(CustomTestCase):
     def setUp(self):
-        self.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        self.model = _dcu_model_path() if _is_dcu_path() else DEFAULT_SMALL_MODEL_NAME_FOR_TEST
         # Initialize the engine in offline (direct) mode.
-        self.engine = sgl.Engine(model_path=self.model)
+        self.engine = sgl.Engine(model_path=self.model, **_dcu_engine_kwargs())
 
     def tearDown(self):
         self.engine.shutdown()
@@ -51,6 +120,10 @@ class TestEngineUpdateWeightsFromDisk(CustomTestCase):
         print(json.dumps(ret))
         return ret
 
+    @unittest.skipIf(
+        _is_dcu_path(),
+        "DCU quick framework keeps only the missing-model negative update path.",
+    )
     def test_update_weights(self):
         origin_response = self.run_decode()
         # Update weights: use new model (remove "-Instruct")
@@ -82,10 +155,14 @@ class TestEngineUpdateWeightsFromDisk(CustomTestCase):
 class TestServerUpdateWeightsFromDisk(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = _dcu_model_path() if _is_dcu_path() else DEFAULT_SMALL_MODEL_NAME_FOR_TEST
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.process = popen_launch_server(
-            cls.model, cls.base_url, timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            other_args=_dcu_server_args(),
+            env=_dcu_env(),
         )
 
     @classmethod
@@ -151,12 +228,16 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
         ret = response.json()
         return ret
 
+    @unittest.skipIf(
+        _is_dcu_path(),
+        "DCU quick framework keeps only the missing-model negative update path.",
+    )
     def test_update_weights(self):
         origin_model_path = self.get_model_info()
         print(f"[Server Mode] origin_model_path: {origin_model_path}")
         origin_response = self.run_decode()
 
-        new_model_path = DEFAULT_SMALL_MODEL_NAME_FOR_TEST.replace("-Instruct", "")
+        new_model_path = self.model.replace("-Instruct", "")
         ret = self.run_update_weights(new_model_path)
         self.assertTrue(ret["success"])
 
@@ -176,6 +257,10 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
         updated_response = self.run_decode()
         self.assertEqual(origin_response[:32], updated_response[:32])
 
+    @unittest.skipIf(
+        _is_dcu_path(),
+        "DCU quick framework skips non-blocking update_weights stress coverage.",
+    )
     def test_update_weights_non_blocking(self):
         origin_model_path = self.get_model_info()
         print(f"[Server Mode] origin_model_path: {origin_model_path}")
@@ -192,9 +277,7 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
                 # ensure the decode has been started
                 time.sleep(2)
 
-                new_model_path = DEFAULT_SMALL_MODEL_NAME_FOR_TEST.replace(
-                    "-Instruct", ""
-                )
+                new_model_path = self.model.replace("-Instruct", "")
                 ret = self.pause_generation(pause_generation_mode)
                 ret = self.run_update_weights(
                     new_model_path, flush_cache=pause_generation_mode == "retract"
@@ -217,7 +300,7 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
         print(f"[Server Mode] origin_model_path: {origin_model_path}")
         origin_response = self.run_decode()
 
-        new_model_path = DEFAULT_SMALL_MODEL_NAME_FOR_TEST.replace("-Instruct", "wrong")
+        new_model_path = self.model.replace("-Instruct", "wrong")
         ret = self.run_update_weights(new_model_path)
         self.assertFalse(ret["success"])
 
@@ -232,6 +315,10 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
 class TestServerUpdateWeightsFromDiskAbortAllRequests(CustomTestCase):
     @classmethod
     def setUpClass(cls):
+        if _is_dcu_path():
+            raise unittest.SkipTest(
+                "DCU quick framework skips abort-all-requests update_weights stress coverage."
+            )
         cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.process = popen_launch_server(
@@ -425,6 +512,8 @@ class TestUpdateWeightsFromDiskParameterized(CustomTestCase):
         return origin_response
 
     def test_parameterized_update_weights(self):
+        if _is_dcu_path():
+            self.skipTest("DCU quick framework skips parameterized update_weights matrix.")
         if is_in_ci():
             # In CI, choose one random mode (Engine or Server) with tp=1, dp=1.
             mode = random.choice(["Engine", "Server"])

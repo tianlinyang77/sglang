@@ -8,7 +8,7 @@ import torch
 import sglang as sgl
 from sglang.srt.utils import kill_process_tree
 from sglang.srt.utils.hf_transformers_utils import get_tokenizer
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_DRAFT_MODEL_EAGLE,
     DEFAULT_DRAFT_MODEL_EAGLE3,
@@ -23,6 +23,14 @@ from sglang.test.test_utils import (
 )
 
 register_cuda_ci(est_time=561, suite="stage-b-test-1-gpu-large")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    nightly=False,
+    disabled="DCU CSV CI placeholder: EAGLE speculative decoding path needs BW1000 draft/target model mapping before enabling.",
+)
 
 torch_dtype = torch.float16
 prefill_tolerance = 5e-2

@@ -11,13 +11,20 @@ from sglang.srt.observability.metrics_collector import (
     compute_routing_key_stats,
 )
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
     is_in_ci,
+    is_in_dcu_ci,
     popen_launch_server,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: test is registered for DCU coverage but lacks three-pass BW1000 PR-gate repeat evidence.",
 )
 
 register_cuda_ci(est_time=32, suite="stage-b-test-1-gpu-small")
@@ -26,6 +33,10 @@ register_amd_ci(est_time=32, suite="stage-b-test-1-gpu-small-amd")
 _MODEL_NAME = "Qwen/Qwen3-0.6B"
 
 
+@unittest.skipIf(
+    is_dcu() or is_in_dcu_ci(),
+    "DCU quick framework keeps metrics server coverage disabled; pure helpers run.",
+)
 class TestEnableMetrics(CustomTestCase):
     def test_metrics_1gpu(self):
         """Test that metrics endpoint returns data when enabled"""

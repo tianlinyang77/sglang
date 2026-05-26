@@ -1,9 +1,15 @@
 import unittest
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.gpt_oss_common import BaseTestGptOss
 
 register_cuda_ci(est_time=519, suite="stage-b-test-1-gpu-large")
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: core/server path needs BW1000 model-runtime repeat validation before required CI.",
+)
 register_amd_ci(est_time=750, suite="stage-b-test-1-gpu-small-amd-mi35x")
 
 

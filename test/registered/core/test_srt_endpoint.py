@@ -5,6 +5,7 @@ python3 -m unittest test_srt_endpoint.TestTokenizeDetokenize
 """
 
 import json
+import os
 import random
 import time
 import unittest
@@ -17,36 +18,78 @@ import requests
 
 from sglang.srt.sampling.custom_logit_processor import CustomLogitProcessor
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
     run_logprob_check,
 )
 
 register_cuda_ci(est_time=127, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=130, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=130,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: core/server path needs BW1000 model-runtime repeat validation before required CI.",
+)
+
+DEFAULT_DCU_SRT_ENDPOINT_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/vllm-optest-models/llama3.2/"
+    "Llama-3.2-1B-Instruct"
+)
 
 
 class TestSRTEndpoint(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
-        cls.base_url = DEFAULT_URL_FOR_TEST
-        cls.process = popen_launch_server(
-            cls.model,
-            cls.base_url,
-            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            other_args=(
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_SRT_ENDPOINT_MODEL",
+                DEFAULT_DCU_SRT_ENDPOINT_MODEL,
+            )
+            other_args = (
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "4096",
+                "--max-total-tokens",
+                "8192",
+                "--max-running-requests",
+                "8",
+                "--chunked-prefill-size",
+                "4096",
+            )
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = (
                 "--enable-custom-logit-processor",
                 "--mem-fraction-static",
                 "0.7",
                 "--cuda-graph-max-bs",
                 "8",
-            ),
+            )
+        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            other_args=other_args,
+            env={
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+                **os.environ,
+            }
+            if is_dcu() or is_in_dcu_ci()
+            else None,
         )
 
     @classmethod
@@ -156,6 +199,8 @@ class TestSRTEndpoint(CustomTestCase):
 
     def test_logprob_with_chunked_prefill(self):
         """Test a long prompt that requests output logprobs will not hit OOM."""
+        if is_dcu() or is_in_dcu_ci():
+            self.skipTest("DCU quick framework skips the long chunked-prefill logprob path.")
         new_tokens = 4
         prompts = "I have a very good idea on this. " * 8000
 
@@ -248,6 +293,8 @@ class TestSRTEndpoint(CustomTestCase):
         self.assertLess(max_diff, 0.35)
 
     def test_logprob_mixed(self):
+        if is_dcu() or is_in_dcu_ci():
+            self.skipTest("DCU quick framework skips the 50K-token mixed logprob stress path.")
         args = []
         temperature = 0
         # input_len, output_len, temperature, logprob_start_len, return_logprob, top_logprobs_num
@@ -440,11 +487,22 @@ class TestSRTEndpoint(CustomTestCase):
 
     def test_custom_logit_processor(self):
         """Test custom logit processor with a single request."""
+        if is_dcu() or is_in_dcu_ci():
+            self.skipTest(
+                "DCU quick framework skips custom logit processor: dill deserialization "
+                "looks for module test_srt_endpoint and crashes the scheduler."
+            )
         self.run_custom_logit_processor(target_token_id=5)
 
     def test_custom_logit_processor_batch_mixed(self):
         """Test a batch of requests mixed of requests with and without custom logit processor."""
-        target_token_ids = list(range(32)) + [None] * 16
+        if is_dcu() or is_in_dcu_ci():
+            self.skipTest(
+                "DCU quick framework skips custom logit processor: dill deserialization "
+                "looks for module test_srt_endpoint and crashes the scheduler."
+            )
+        else:
+            target_token_ids = list(range(32)) + [None] * 16
         random.shuffle(target_token_ids)
         with ThreadPoolExecutor(len(target_token_ids)) as executor:
             list(executor.map(self.run_custom_logit_processor, target_token_ids))
@@ -475,6 +533,8 @@ class TestSRTEndpoint(CustomTestCase):
             )
 
     def test_cache_tokens(self):
+        if is_dcu() or is_in_dcu_ci():
+            self.skipTest("DCU quick framework skips the 10K cached-token stress path.")
         for _ in range(2):
             time.sleep(1)
             response = requests.post(self.base_url + "/flush_cache")
@@ -649,7 +709,36 @@ class TestSRTEndpoint(CustomTestCase):
 class TestTokenizeDetokenize(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_SRT_ENDPOINT_MODEL",
+                DEFAULT_DCU_SRT_ENDPOINT_MODEL,
+            )
+            other_args = (
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "4096",
+                "--max-total-tokens",
+                "8192",
+                "--max-running-requests",
+                "8",
+                "--chunked-prefill-size",
+                "4096",
+            )
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+                **os.environ,
+            }
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = None
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.tokenize_url = f"{cls.base_url}/tokenize"
         cls.detokenize_url = f"{cls.base_url}/detokenize"
@@ -658,6 +747,8 @@ class TestTokenizeDetokenize(CustomTestCase):
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            other_args=other_args,
+            env=env,
         )
 
     @classmethod

@@ -4,7 +4,33 @@ import os
 import sys
 from typing import List
 
-import tabulate
+try:
+    import tabulate
+except ModuleNotFoundError:
+
+    class _TabulateFallback:
+        @staticmethod
+        def tabulate(rows, headers=(), tablefmt=None):
+            table = [list(headers)] if headers else []
+            table.extend(rows)
+            if not table:
+                return ""
+            widths = [
+                max(len(str(row[i])) for row in table)
+                for i in range(max(len(row) for row in table))
+            ]
+
+            def fmt(row):
+                return " | ".join(
+                    str(row[i]).ljust(widths[i]) for i in range(len(widths))
+                )
+
+            lines = [fmt(row) for row in table]
+            if headers:
+                lines.insert(1, "-+-".join("-" * width for width in widths))
+            return "\n".join(lines)
+
+    tabulate = _TabulateFallback()
 
 from sglang.test.ci.ci_register import (
     CIRegistry,
@@ -18,6 +44,7 @@ HW_MAPPING = {
     "cpu": HWBackend.CPU,
     "cuda": HWBackend.CUDA,
     "amd": HWBackend.AMD,
+    "dcu": HWBackend.DCU,
     "npu": HWBackend.NPU,
 }
 
@@ -35,6 +62,10 @@ PER_COMMIT_SUITES = {
         "stage-c-test-4-gpu-amd",
         "stage-c-test-large-8-gpu-amd",
         "stage-c-test-large-8-gpu-amd-mi35x",
+    ],
+    HWBackend.DCU: [
+        "stage-a-dcu",
+        "stage-b-dcu",
     ],
     HWBackend.CUDA: [
         "stage-a-test-1-gpu-small",
@@ -97,6 +128,9 @@ NIGHTLY_SUITES = {
         "nightly-amd-8-gpu-mi35x",
     ],
     HWBackend.CPU: [],
+    HWBackend.DCU: [
+        "nightly-dcu",
+    ],
     HWBackend.NPU: [
         "nightly-1-npu-a3",
         "nightly-2-npu-a3",
@@ -129,6 +163,73 @@ def filter_tests(
     skipped_tests = [t for t in ci_tests if t.disabled is not None]
 
     return enabled_tests, skipped_tests
+
+
+def _include_file_keys(filename: str, repo_root: str, test_root: str) -> set[str]:
+    filename = os.path.normpath(os.path.abspath(filename))
+    keys = {filename}
+
+    for root in (repo_root, test_root):
+        root = os.path.normpath(os.path.abspath(root))
+        relpath = os.path.normpath(os.path.relpath(filename, root))
+        if relpath != os.pardir and not relpath.startswith(os.pardir + os.sep):
+            keys.add(relpath)
+
+    return keys
+
+
+def _matches_include_file(
+    test: CIRegistry, include_file: str, repo_root: str, test_root: str
+) -> bool:
+    include_file = os.path.normpath(include_file)
+    return include_file in _include_file_keys(test.filename, repo_root, test_root)
+
+
+def filter_include_files(
+    ci_tests: List[CIRegistry],
+    skipped_tests: List[CIRegistry],
+    include_files: List[str],
+    repo_root: str,
+    test_root: str,
+) -> tuple[List[CIRegistry], List[CIRegistry], str | None]:
+    include_files = [os.path.normpath(path) for path in include_files if path]
+    if not include_files:
+        return ci_tests, skipped_tests, None
+
+    selected_tests = [
+        test
+        for test in ci_tests
+        if any(
+            _matches_include_file(test, include_file, repo_root, test_root)
+            for include_file in include_files
+        )
+    ]
+    selected_skipped_tests = [
+        test
+        for test in skipped_tests
+        if any(
+            _matches_include_file(test, include_file, repo_root, test_root)
+            for include_file in include_files
+        )
+    ]
+
+    errors = []
+    all_suite_tests = ci_tests + skipped_tests
+    for include_file in include_files:
+        matched_tests = [
+            test
+            for test in all_suite_tests
+            if _matches_include_file(test, include_file, repo_root, test_root)
+        ]
+        if not matched_tests:
+            errors.append(f"{include_file} was not found in the selected suite.")
+            continue
+
+        disabled_tests = [test for test in matched_tests if test.disabled is not None]
+        for test in disabled_tests:
+            errors.append(f"{include_file} is disabled: {test.disabled}")
+
+    return selected_tests, selected_skipped_tests, "\n".join(errors) if errors else None
 
 
 def pretty_print_tests(
@@ -205,6 +306,17 @@ def run_a_suite(args):
     all_tests = collect_tests(files, sanity_check=sanity_check)
     ci_tests, skipped_tests = filter_tests(all_tests, hw, suite, nightly)
 
+    ci_tests, skipped_tests, include_error = filter_include_files(
+        ci_tests,
+        skipped_tests,
+        args.include_file,
+        repo_root=repo_root,
+        test_root=script_dir,
+    )
+    if include_error:
+        print(include_error, file=sys.stderr, flush=True)
+        return 1
+
     if auto_partition_size:
         ci_tests = auto_partition(ci_tests, auto_partition_id, auto_partition_size)
 
@@ -263,6 +375,15 @@ def main():
         "--auto-partition-size",
         type=int,
         help="Use auto load balancing. The number of parts.",
+    )
+    parser.add_argument(
+        "--include-file",
+        action="append",
+        default=[],
+        help=(
+            "Restrict the selected suite to a registered file. Can be repeated. "
+            "Accepts paths relative to repo root or test/."
+        ),
     )
     parser.add_argument(
         "--enable-retry",

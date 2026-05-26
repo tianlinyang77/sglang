@@ -5,7 +5,7 @@ import unittest
 from typing import Any, List, Optional, Tuple
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -13,36 +13,96 @@ from sglang.test.test_utils import (
     STDERR_FILENAME,
     STDOUT_FILENAME,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
     send_concurrent_generate_requests_with_custom_params,
 )
 
 register_cuda_ci(est_time=130, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=195, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=195,
+    suite="stage-b-dcu",
+)
+
+DEFAULT_DCU_PRIORITY_SCHEDULING_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
+
+
+def _is_dcu_test():
+    return is_dcu() or is_in_dcu_ci()
+
+
+def _get_model():
+    if _is_dcu_test():
+        return os.environ.get(
+            "SGLANG_DCU_PRIORITY_SCHEDULING_MODEL",
+            os.environ.get(
+                "SGLANG_DCU_SERVER_SMOKE_MODEL",
+                DEFAULT_DCU_PRIORITY_SCHEDULING_MODEL,
+            ),
+        )
+    return DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+
+
+def _dcu_max_new_tokens(value: int) -> int:
+    if not _is_dcu_test():
+        return value
+    return max(32, min(512, value // 16))
+
+
+def _get_launch_args(*base_args: str) -> Tuple[List[str], Optional[dict]]:
+    launch_args = list(base_args)
+    env = None
+    if _is_dcu_test():
+        launch_args += [
+            "--attention-backend",
+            "fa3",
+            "--page-size",
+            "64",
+            "--trust-remote-code",
+            "--disable-cuda-graph",
+            "--context-length",
+            "4096",
+            "--max-total-tokens",
+            "8192",
+            "--chunked-prefill-size",
+            "2048",
+        ]
+        env = {
+            "SGLANG_USE_MODELSCOPE": "1",
+            "SGLANG_USE_LIGHTOP": "1",
+            **os.environ,
+        }
+    return launch_args, env
 
 
 class TestPriorityScheduling(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = _get_model()
         cls.base_url = DEFAULT_URL_FOR_TEST
 
         cls.stdout = open(STDOUT_FILENAME, "w")
         cls.stderr = open(STDERR_FILENAME, "w")
 
         cls.base_url = DEFAULT_URL_FOR_TEST
+        other_args, env = _get_launch_args(
+            "--max-running-requests",  # Enforce max request concurrency is 1
+            "1",
+            "--max-queued-requests",  # Enforce max queued request number is 3
+            "3",
+            "--enable-priority-scheduling",  # Enable priority scheduling
+        )
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            other_args=(
-                "--max-running-requests",  # Enforce max request concurrency is 1
-                "1",
-                "--max-queued-requests",  # Enforce max queued request number is 3
-                "3",
-                "--enable-priority-scheduling",  # Enable priority scheduling
-            ),
+            other_args=other_args,
             return_stdout_stderr=(cls.stdout, cls.stderr),
+            env=env,
         )
 
     @classmethod
@@ -63,7 +123,7 @@ class TestPriorityScheduling(CustomTestCase):
                 [
                     {
                         "priority": 0,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },  # starts being processed first
                     {"priority": 1},  # third
                     {"priority": 1},  # fourth
@@ -94,7 +154,7 @@ class TestPriorityScheduling(CustomTestCase):
                 [
                     {
                         "priority": 1,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },  # starts being processed first and holds the running queue capacity
                     {"priority": 2},  # aborted by request 5
                     {"priority": 3},  # aborted by request 6
@@ -131,7 +191,7 @@ class TestPriorityScheduling(CustomTestCase):
                 [
                     {
                         "priority": 7,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },  # starts being processed first and holds the running queue capacity
                     {"priority": 6},  # second
                     {"priority": 5},  # third
@@ -168,15 +228,15 @@ class TestPriorityScheduling(CustomTestCase):
                 [
                     {
                         "priority": 0,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },  # starts being processed first then preempted or pushed by later requests, and finishes last.
                     {
                         "priority": 10,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },  # scheduled after the third request, and finishes second.
                     {
                         "priority": 20,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },  # finishes first.
                 ],
             )
@@ -204,11 +264,11 @@ class TestPriorityScheduling(CustomTestCase):
                 [
                     {
                         "priority": 0,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },
                     {
                         "priority": 5,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },
                 ],
             )
@@ -230,25 +290,27 @@ class TestPriorityScheduling(CustomTestCase):
 class TestPrioritySchedulingMultipleRunningRequests(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        cls.model = _get_model()
         cls.base_url = DEFAULT_URL_FOR_TEST
 
         cls.stdout = open(STDOUT_FILENAME, "w")
         cls.stderr = open(STDERR_FILENAME, "w")
 
         cls.base_url = DEFAULT_URL_FOR_TEST
+        other_args, env = _get_launch_args(
+            "--max-running-requests",  # Enforce max request concurrency is 2
+            "2",
+            "--max-queued-requests",  # Enforce max queued request number is 3
+            "3",
+            "--enable-priority-scheduling",  # Enable priority scheduling
+        )
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            other_args=(
-                "--max-running-requests",  # Enforce max request concurrency is 2
-                "2",
-                "--max-queued-requests",  # Enforce max queued request number is 3
-                "3",
-                "--enable-priority-scheduling",  # Enable priority scheduling
-            ),
+            other_args=other_args,
             return_stdout_stderr=(cls.stdout, cls.stderr),
+            env=env,
         )
 
     @classmethod
@@ -269,15 +331,15 @@ class TestPrioritySchedulingMultipleRunningRequests(CustomTestCase):
                 [
                     {
                         "priority": 10,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },  # finishes first
                     {
                         "priority": 5,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },  # preempted by fourth request, then finishes third
                     {
                         "priority": 15,
-                        "sampling_params": {"max_new_tokens": 10000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(10000)},
                     },  # preempt the first request
                 ],
             )
@@ -332,19 +394,19 @@ class TestPrioritySchedulingMultipleRunningRequests(CustomTestCase):
                 [
                     {
                         "priority": 0,
-                        "sampling_params": {"max_new_tokens": 8000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(8000)},
                     },  # Low priority, large token count - will be preempted
                     {
                         "priority": 1,
-                        "sampling_params": {"max_new_tokens": 5000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(5000)},
                     },  # Medium priority, medium token count - queued initially
                     {
                         "priority": 100,
-                        "sampling_params": {"max_new_tokens": 1000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(1000)},
                     },  # High priority, small token count - triggers preemption
                     {
                         "priority": 50,
-                        "sampling_params": {"max_new_tokens": 2000},
+                        "sampling_params": {"max_new_tokens": _dcu_max_new_tokens(2000)},
                     },  # Should be schedulable after correct token accounting
                 ],
             )

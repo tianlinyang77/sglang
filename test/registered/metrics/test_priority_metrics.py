@@ -8,12 +8,19 @@ from prometheus_client.samples import Sample
 
 from sglang.srt.observability.metrics_collector import QueueCount
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: test is registered for DCU coverage but lacks three-pass BW1000 PR-gate repeat evidence.",
 )
 
 register_cuda_ci(
@@ -76,6 +83,10 @@ class TestQueueCount(CustomTestCase):
         self.assertEqual(qc.by_priority, {})
 
 
+@unittest.skipIf(
+    is_dcu() or is_in_dcu_ci(),
+    "DCU quick framework keeps priority metrics server coverage disabled; queue unit tests run.",
+)
 class TestPriorityMetrics(CustomTestCase):
     """Test that priority-based metrics are correctly emitted when
     --enable-priority-scheduling is enabled."""

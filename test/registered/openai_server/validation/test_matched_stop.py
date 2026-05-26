@@ -1,35 +1,85 @@
+import os
 import unittest
 
 from sglang.srt.sampling.sampling_params import MAX_LEN, get_max_seq_length
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.kits.matched_stop_kit import MatchedStopMixin
 from sglang.test.test_utils import (
     DEFAULT_MODEL_NAME_FOR_TEST,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
 )
 
 register_cuda_ci(est_time=40, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=60, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=60,
+    suite="stage-b-dcu",
+)
+
+DEFAULT_DCU_MATCHED_STOP_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
 
 
 class TestMatchedStop(CustomTestCase, MatchedStopMixin):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_MATCHED_STOP_MODEL",
+                os.environ.get(
+                    "SGLANG_DCU_SERVER_SMOKE_MODEL", DEFAULT_DCU_MATCHED_STOP_MODEL
+                ),
+            )
+            other_args = [
+                "--max-running-requests",
+                "10",
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "2048",
+                "--max-total-tokens",
+                "4096",
+                "--chunked-prefill-size",
+                "2048",
+            ]
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+            }
+        else:
+            cls.model = DEFAULT_MODEL_NAME_FOR_TEST
+            other_args = ["--max-running-requests", "10"]
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=300,
-            other_args=["--max-running-requests", "10"],
+            other_args=other_args,
+            env=env,
         )
 
     @classmethod
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
+
+    def test_finish_stop_eos(self):
+        if is_dcu() or is_in_dcu_ci():
+            self.skipTest(
+                "DCU matched_stop EOS case is Llama-token specific; Qwen2.5 local "
+                "model validation covers stop string, stop regex, and length cases."
+            )
+        return super().test_finish_stop_eos()
 
 
 class TestRegexPatternMaxLength(unittest.TestCase):

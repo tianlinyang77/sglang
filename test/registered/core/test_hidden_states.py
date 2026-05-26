@@ -1,27 +1,67 @@
 import unittest
+import os
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import sglang as sgl
 from sglang.srt.utils import get_device, is_hip
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
-from sglang.test.test_utils import DEFAULT_SMALL_MODEL_NAME_FOR_TEST, CustomTestCase
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
+from sglang.test.test_utils import (
+    DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
+    CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
+)
 
 register_cuda_ci(est_time=55, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=55, suite="stage-b-test-1-gpu-small-amd")
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=55,
+    suite="stage-b-dcu",
+    disabled="BW1000 quick validation failed: HF vs SRT hidden states max diff around 7.75; needs numerical investigation before PR gate.",
+)
+
+DEFAULT_DCU_HIDDEN_STATES_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
+DCU_ENGINE_KWARGS = {
+    "attention_backend": "fa3",
+    "page_size": 64,
+    "disable_cuda_graph": True,
+    "context_length": 2048,
+    "max_total_tokens": 4096,
+    "max_running_requests": 8,
+    "chunked_prefill_size": 2048,
+}
 
 _is_hip = is_hip()
 if _is_hip:
-    import os
-
     os.environ["SGLANG_USE_AITER"] = "0"
+
+if is_dcu() or is_in_dcu_ci():
+    os.environ.setdefault("SGLANG_USE_MODELSCOPE", "1")
+    os.environ.setdefault("SGLANG_USE_LIGHTOP", "1")
+
+
+def get_test_model_path():
+    if is_dcu() or is_in_dcu_ci():
+        return os.environ.get(
+            "SGLANG_DCU_HIDDEN_STATES_MODEL",
+            os.environ.get("SGLANG_DCU_SERVER_SMOKE_MODEL", DEFAULT_DCU_HIDDEN_STATES_MODEL),
+        )
+    return DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+
+
+def get_dcu_engine_kwargs():
+    return DCU_ENGINE_KWARGS if is_dcu() or is_in_dcu_ci() else {}
 
 
 class TestHiddenState(CustomTestCase):
     def test_return_hidden_states(self):
         prompts = ["Today is", "Today is a sunny day and I like"]
-        model_path = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        model_path = get_test_model_path()
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         input_ids = tokenizer(prompts).input_ids
 
@@ -35,6 +75,7 @@ class TestHiddenState(CustomTestCase):
             random_seed=42,
             skip_tokenizer_init=True,
             enable_return_hidden_states=True,
+            **get_dcu_engine_kwargs(),
         )
         outputs = engine.generate(
             input_ids=input_ids,
@@ -95,7 +136,7 @@ class TestHiddenState(CustomTestCase):
 
     def test_repeatedly_changes_hidden_states(self):
         prompts = ["Today is", "Today is a sunny day and I like"]
-        model_path = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        model_path = get_test_model_path()
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         input_ids = tokenizer(prompts).input_ids
 
@@ -109,6 +150,7 @@ class TestHiddenState(CustomTestCase):
             random_seed=42,
             skip_tokenizer_init=True,
             enable_return_hidden_states=True,
+            **get_dcu_engine_kwargs(),
         )
         outputs_completion_first_round = engine.generate(
             input_ids=input_ids,

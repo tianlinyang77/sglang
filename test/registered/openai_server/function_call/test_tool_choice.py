@@ -8,22 +8,35 @@ Tests: required, auto, and specific function choices in both streaming and non-s
 """
 
 import json
+import os
 import unittest
 
 import openai
 
 from sglang.srt.utils import kill_process_tree
 from sglang.srt.utils.hf_transformers_utils import get_tokenizer
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: OpenAI server path needs BW1000 small-model repeat validation before required CI.",
 )
 
 register_cuda_ci(est_time=120, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=258, suite="stage-b-test-1-gpu-small-amd")
+
+DEFAULT_DCU_TOOL_CHOICE_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/vllm-optest-models/llama3.2/"
+    "Llama-3.2-1B-Instruct"
+)
 
 
 class TestToolChoiceLlama32(CustomTestCase):
@@ -37,7 +50,41 @@ class TestToolChoiceLlama32(CustomTestCase):
         }
 
         # Use a model that supports function calling
-        cls.model = "meta-llama/Llama-3.2-1B-Instruct"
+        if is_dcu() or is_in_dcu_ci():
+            cls.model = os.environ.get(
+                "SGLANG_DCU_TOOL_CHOICE_MODEL",
+                os.environ.get(
+                    "SGLANG_DCU_SERVER_SMOKE_MODEL", DEFAULT_DCU_TOOL_CHOICE_MODEL
+                ),
+            )
+            other_args = [
+                "--tool-call-parser",
+                "llama3",
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--disable-cuda-graph",
+                "--context-length",
+                "4096",
+                "--max-total-tokens",
+                "8192",
+                "--max-running-requests",
+                "8",
+                "--chunked-prefill-size",
+                "4096",
+            ]
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+            }
+        else:
+            cls.model = "meta-llama/Llama-3.2-1B-Instruct"
+            other_args = [
+                "--tool-call-parser",
+                "llama3",  # Default parser for the test model
+            ]
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
 
@@ -47,10 +94,8 @@ class TestToolChoiceLlama32(CustomTestCase):
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             api_key=cls.api_key,
-            other_args=[
-                "--tool-call-parser",
-                "llama3",  # Default parser for the test model
-            ],
+            other_args=other_args,
+            env=env,
         )
         cls.base_url += "/v1"
         cls.tokenizer = get_tokenizer(cls.model)
@@ -762,6 +807,11 @@ class TestToolChoiceLlama32(CustomTestCase):
         self.assertIn("not supported", error_msg)
 
 
+@unittest.skipIf(
+    is_dcu() or is_in_dcu_ci(),
+    "DCU quick framework enables the validated Llama3.2 tool-choice suite; "
+    "Qwen2.5 7B coverage needs separate local-model mapping.",
+)
 class TestToolChoiceQwen25(TestToolChoiceLlama32):
     """Test tool_choice functionality with Qwen2.5 model"""
 
@@ -787,6 +837,11 @@ class TestToolChoiceQwen25(TestToolChoiceLlama32):
         cls.tokenizer = get_tokenizer(cls.model)
 
 
+@unittest.skipIf(
+    is_dcu() or is_in_dcu_ci(),
+    "DCU quick framework enables the validated Llama3.2 tool-choice suite; "
+    "Mistral coverage needs separate local-model mapping.",
+)
 class TestToolChoiceMistral(TestToolChoiceLlama32):
     """Test tool_choice functionality with Mistral model"""
 
@@ -860,6 +915,11 @@ class TestToolChoiceMistral(TestToolChoiceLlama32):
 #         cls.tokenizer = get_tokenizer(cls.model)
 
 
+@unittest.skipIf(
+    is_dcu() or is_in_dcu_ci(),
+    "DCU quick framework enables the validated Llama3.2 tool-choice suite; "
+    "LFM2 coverage needs separate local-model mapping.",
+)
 class TestToolChoiceLfm2(TestToolChoiceLlama32):
     """Test tool_choice functionality with LiquidAI LFM2 model"""
 
@@ -888,6 +948,11 @@ class TestToolChoiceLfm2(TestToolChoiceLlama32):
         cls.tokenizer = get_tokenizer(cls.model)
 
 
+@unittest.skipIf(
+    is_dcu() or is_in_dcu_ci(),
+    "DCU quick framework enables the validated Llama3.2 tool-choice suite; "
+    "LFM2 MoE coverage needs separate local-model mapping.",
+)
 class TestToolChoiceLfm2Moe(TestToolChoiceLlama32):
     """Test tool_choice functionality with LiquidAI LFM2-MoE model"""
 

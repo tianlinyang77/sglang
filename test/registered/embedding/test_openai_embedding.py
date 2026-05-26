@@ -1,37 +1,106 @@
 import json
+import os
 import unittest
 
 import openai
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_EMBEDDING_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
+)
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: embedding path needs local model mapping and BW1000 repeat validation before required CI.",
 )
 
 register_cuda_ci(est_time=70, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=141, suite="stage-b-test-1-gpu-small-amd")
 
+DEFAULT_DCU_OPENAI_EMBEDDING_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/vllm-optest-models/BAAI/bge-small-en"
+)
+DCU_OPENAI_EMBEDDING_MODEL_ENV = "SGLANG_DCU_OPENAI_EMBEDDING_MODEL"
+
+
+def _is_dcu_path():
+    return is_dcu() or is_in_dcu_ci()
+
+
+def _embedding_model():
+    if _is_dcu_path():
+        return os.environ.get(
+            DCU_OPENAI_EMBEDDING_MODEL_ENV, DEFAULT_DCU_OPENAI_EMBEDDING_MODEL
+        )
+    return DEFAULT_SMALL_EMBEDDING_MODEL_NAME_FOR_TEST
+
+
+def _embedding_server_args(*extra_args):
+    args = ["--is-embedding", "--enable-metrics"]
+    if _is_dcu_path():
+        args.extend(
+            [
+                "--attention-backend",
+                "torch_native",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "512",
+                "--max-total-tokens",
+                "2048",
+                "--max-running-requests",
+                "8",
+                "--chunked-prefill-size",
+                "512",
+            ]
+        )
+    args.extend(extra_args)
+    return args
+
+
+def _embedding_server_env():
+    if not _is_dcu_path():
+        return None
+    return {
+        "SGLANG_USE_MODELSCOPE": "1",
+        "SGLANG_USE_LIGHTOP": "1",
+    }
+
+
+def _embedding_hidden_size(model):
+    try:
+        with open(os.path.join(model, "config.json")) as fin:
+            return int(json.load(fin)["hidden_size"])
+    except Exception:
+        return 1536
+
 
 class TestOpenAIEmbedding(CustomTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_EMBEDDING_MODEL_NAME_FOR_TEST
+        cls.model = _embedding_model()
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
 
         # Configure embedding-specific args
-        other_args = ["--is-embedding", "--enable-metrics"]
+        other_args = _embedding_server_args()
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             api_key=cls.api_key,
             other_args=other_args,
+            env=_embedding_server_env(),
         )
         cls.base_url += "/v1"
 
@@ -114,28 +183,32 @@ class TestMatryoshkaEmbeddingModel(CustomTestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_EMBEDDING_MODEL_NAME_FOR_TEST
+        cls.model = _embedding_model()
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
-        cls.matryoshka_dims = [128, 256, 512, 768, 1024]
+        cls.embedding_size = _embedding_hidden_size(cls.model)
+        cls.matryoshka_dims = (
+            [64, 128, 256]
+            if _is_dcu_path()
+            else [128, 256, 512, 768, 1024]
+        )
 
         # Configure embedding-specific args with Matryoshka support via json_model_override_args
         matryoshka_config = {
             "is_matryoshka": True,
             "matryoshka_dimensions": cls.matryoshka_dims,
         }
-        other_args = [
-            "--is-embedding",
-            "--enable-metrics",
+        other_args = _embedding_server_args(
             "--json-model-override-args",
             json.dumps(matryoshka_config),
-        ]
+        )
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             api_key=cls.api_key,
             other_args=other_args,
+            env=_embedding_server_env(),
         )
         cls.base_url += "/v1"
 
@@ -180,7 +253,7 @@ class TestMatryoshkaEmbeddingModel(CustomTestCase):
         self.assertEqual(len(response.data), 1)
 
         # Should return full embedding size when no dimensions specified
-        self.assertEqual(len(response.data[0].embedding), 1536)
+        self.assertEqual(len(response.data[0].embedding), self.embedding_size)
 
     def test_matryoshka_embedding_invalid_dimensions(self):
         """Test Matryoshka embedding with invalid dimensions."""

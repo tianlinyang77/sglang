@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import requests
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.test.send_one import BenchArgs, send_one_prompt
 from sglang.test.test_utils import (
@@ -16,6 +16,14 @@ from sglang.test.test_utils import (
 )
 
 register_cuda_ci(est_time=563, suite="stage-c-test-deepep-8-gpu-h200")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=563,
+    suite="nightly-dcu",
+    nightly=True,
+    disabled="DCU CSV CI placeholder: DeepEP large path needs BW1000 8-GPU validation before enabling.",
+)
 
 DEEPSEEK_V32_MODEL_PATH = "deepseek-ai/DeepSeek-V3.2"
 

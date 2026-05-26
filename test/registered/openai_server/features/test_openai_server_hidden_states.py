@@ -1,11 +1,12 @@
 import unittest
+import os
 from abc import ABC
 
 import openai
 
 from sglang.srt.utils import kill_process_tree
 from sglang.srt.utils.hf_transformers_utils import get_tokenizer
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_DRAFT_MODEL_EAGLE,
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
@@ -13,7 +14,14 @@ from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
+    is_dcu,
+    is_in_dcu_ci,
     popen_launch_server,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: OpenAI server path needs BW1000 small-model repeat validation before required CI.",
 )
 
 register_cuda_ci(est_time=186, suite="stage-b-test-1-gpu-small")
@@ -22,6 +30,41 @@ register_amd_ci(
     suite="stage-b-test-1-gpu-small-amd",
     disabled="see https://github.com/sgl-project/sglang/issues/11127",
 )
+
+DEFAULT_DCU_HIDDEN_STATES_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/vllm-optest-models/llama3.2/"
+    "Llama-3.2-1B-Instruct"
+)
+
+
+def dcu_hidden_states_server_config():
+    return {
+        "model": os.environ.get(
+            "SGLANG_DCU_HIDDEN_STATES_MODEL",
+            os.environ.get(
+                "SGLANG_DCU_SERVER_SMOKE_MODEL", DEFAULT_DCU_HIDDEN_STATES_MODEL
+            ),
+        ),
+        "other_args": [
+            "--attention-backend",
+            "fa3",
+            "--page-size",
+            "64",
+            "--disable-cuda-graph",
+            "--context-length",
+            "2048",
+            "--max-total-tokens",
+            "4096",
+            "--max-running-requests",
+            "8",
+            "--chunked-prefill-size",
+            "2048",
+        ],
+        "env": {
+            "SGLANG_USE_MODELSCOPE": "1",
+            "SGLANG_USE_LIGHTOP": "1",
+        },
+    }
 
 
 class BaseTestOpenAIServerWithHiddenStates(ABC):
@@ -215,7 +258,17 @@ class TestOpenAIServerWithHiddenStatesEnabled(
 ):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            server_config = dcu_hidden_states_server_config()
+            cls.model = server_config["model"]
+            other_args = server_config["other_args"] + [
+                "--enable-return-hidden-states"
+            ]
+            env = server_config["env"]
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = ["--enable-return-hidden-states"]
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
         cls.process = popen_launch_server(
@@ -223,10 +276,11 @@ class TestOpenAIServerWithHiddenStatesEnabled(
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             api_key=cls.api_key,
-            other_args=["--enable-return-hidden-states"],
+            other_args=other_args,
+            env=env,
         )
         cls.base_url += "/v1"
-        cls.tokenizer = get_tokenizer(DEFAULT_SMALL_MODEL_NAME_FOR_TEST)
+        cls.tokenizer = get_tokenizer(cls.model)
         cls.return_hidden_states = [False, True]
         cls.use_list_input = [True, False]
         cls.parallel_sample_nums = [1, 2]
@@ -241,7 +295,17 @@ class TestOpenAIServerWithHiddenStatesEnabledAndCUDAGraphDisabled(
 ):
     @classmethod
     def setUpClass(cls):
-        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+        if is_dcu() or is_in_dcu_ci():
+            server_config = dcu_hidden_states_server_config()
+            cls.model = server_config["model"]
+            other_args = server_config["other_args"] + [
+                "--enable-return-hidden-states"
+            ]
+            env = server_config["env"]
+        else:
+            cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+            other_args = ["--enable-return-hidden-states", "--disable-cuda-graph"]
+            env = None
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-123456"
         cls.process = popen_launch_server(
@@ -249,10 +313,11 @@ class TestOpenAIServerWithHiddenStatesEnabledAndCUDAGraphDisabled(
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             api_key=cls.api_key,
-            other_args=["--enable-return-hidden-states", "--disable-cuda-graph"],
+            other_args=other_args,
+            env=env,
         )
         cls.base_url += "/v1"
-        cls.tokenizer = get_tokenizer(DEFAULT_SMALL_MODEL_NAME_FOR_TEST)
+        cls.tokenizer = get_tokenizer(cls.model)
         cls.return_hidden_states = [False, True]
         cls.use_list_input = [True, False]
         cls.parallel_sample_nums = [1]
@@ -262,6 +327,11 @@ class TestOpenAIServerWithHiddenStatesEnabledAndCUDAGraphDisabled(
         kill_process_tree(cls.process.pid)
 
 
+@unittest.skipIf(
+    is_dcu() or is_in_dcu_ci(),
+    "DCU quick framework validates hidden states on the local Llama3.2 model; "
+    "EAGLE hidden-states coverage needs separate model mapping.",
+)
 class TestOpenAIServerWithEAGLEAndHiddenStatesEnabled(
     CustomTestCase, BaseTestOpenAIServerWithHiddenStates
 ):
@@ -307,6 +377,11 @@ class TestOpenAIServerWithEAGLEAndHiddenStatesEnabled(
         kill_process_tree(cls.process.pid)
 
 
+@unittest.skipIf(
+    is_dcu() or is_in_dcu_ci(),
+    "DCU quick framework validates hidden states on the local Llama3.2 model; "
+    "EAGLE3 hidden-states coverage needs separate model mapping.",
+)
 class TestOpenAIServerWithEAGLE3AndHiddenStatesEnabled(
     CustomTestCase, BaseTestOpenAIServerWithHiddenStates
 ):

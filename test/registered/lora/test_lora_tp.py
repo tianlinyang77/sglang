@@ -17,7 +17,7 @@ import os
 import unittest
 from typing import List, Optional
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.lora_utils import (
     ALL_OTHER_LORA_MODELS,
     CI_LORA_MODELS,
@@ -26,6 +26,12 @@ from sglang.test.lora_utils import (
     TORCH_DTYPES,
     LoRAModelCase,
     run_lora_test_one_by_one,
+)
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
 )
 from sglang.test.test_utils import CustomTestCase, is_in_ci
 

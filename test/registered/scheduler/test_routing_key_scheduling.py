@@ -6,7 +6,7 @@ import unittest
 import aiohttp
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
@@ -18,6 +18,22 @@ from sglang.test.test_utils import (
 
 register_cuda_ci(est_time=120, suite="nightly-1-gpu", nightly=True)
 register_amd_ci(est_time=120, suite="nightly-amd-1-gpu", nightly=True)
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
+    disabled="BW1000 routing-key scheduling did not finish within the quick-validation window even after reducing long requests; needs scheduler专项 validation.",
+)
+
+DEFAULT_DCU_ROUTING_KEY_MODEL = (
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-0.5B-Instruct"
+)
+
+
+def _is_dcu_test():
+    return os.environ.get("SGLANG_IS_IN_DCU_CI") == "1" or os.environ.get(
+        "DCU_VISIBLE_DEVICES"
+    ) is not None
 
 
 class TestRoutingKeyScheduling(CustomTestCase):
@@ -25,23 +41,54 @@ class TestRoutingKeyScheduling(CustomTestCase):
     def setUpClass(cls):
         os.environ["SGLANG_ROUTING_KEY_POLICY_DEBUG_LOG"] = "1"
 
-        cls.model = "Qwen/Qwen3-0.6B"
+        cls.model = (
+            os.environ.get(
+                "SGLANG_DCU_ROUTING_KEY_MODEL",
+                os.environ.get("SGLANG_DCU_SERVER_SMOKE_MODEL", DEFAULT_DCU_ROUTING_KEY_MODEL),
+            )
+            if _is_dcu_test()
+            else "Qwen/Qwen3-0.6B"
+        )
         cls.base_url = DEFAULT_URL_FOR_TEST
 
         cls.stdout = open(STDOUT_FILENAME, "w")
         cls.stderr = open(STDERR_FILENAME, "w")
 
+        other_args = [
+            "--max-running-requests",
+            "3",
+            "--schedule-policy",
+            "routing-key",
+        ]
+        env = None
+        if _is_dcu_test():
+            other_args += [
+                "--attention-backend",
+                "fa3",
+                "--page-size",
+                "64",
+                "--trust-remote-code",
+                "--disable-cuda-graph",
+                "--context-length",
+                "4096",
+                "--max-total-tokens",
+                "8192",
+                "--chunked-prefill-size",
+                "2048",
+            ]
+            env = {
+                "SGLANG_USE_MODELSCOPE": "1",
+                "SGLANG_USE_LIGHTOP": "1",
+                **os.environ,
+            }
+
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            other_args=(
-                "--max-running-requests",
-                "3",
-                "--schedule-policy",
-                "routing-key",
-            ),
+            other_args=other_args,
             return_stdout_stderr=(cls.stdout, cls.stderr),
+            env=env,
         )
 
     @classmethod
@@ -66,8 +113,8 @@ class TestRoutingKeyScheduling(CustomTestCase):
 
     async def _test_routing_key_scheduling_order(self):
         long_running_tasks = [
-            asyncio.create_task(self._send_chat_request("key_a", 20000)),
-            asyncio.create_task(self._send_chat_request("key_a", 20000)),
+            asyncio.create_task(self._send_chat_request("key_a", 512 if _is_dcu_test() else 20000)),
+            asyncio.create_task(self._send_chat_request("key_a", 512 if _is_dcu_test() else 20000)),
         ]
 
         await asyncio.sleep(2.0)

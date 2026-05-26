@@ -20,7 +20,7 @@ from sglang.srt.layers.quantization.modelopt_quant import (
 from sglang.srt.model_loader.loader import ModelOptModelLoader
 from sglang.srt.models.utils import WeightsMapper
 from sglang.srt.utils import get_device
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import CustomTestCase
 
 # Note: PYTHONPATH=python should be set when running tests
@@ -31,6 +31,9 @@ CALIBRATION_NUM_SAMPLES = 512
 DEFAULT_DEVICE = "cuda:0"
 
 register_cuda_ci(est_time=11, suite="stage-b-test-1-gpu-small")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(est_time=30, suite="stage-b-dcu", disabled="DCU PR baseline deferred: test is registered for DCU coverage but lacks three-pass BW1000 PR-gate repeat evidence.")
 
 
 class TestModelOptModelLoader(CustomTestCase):

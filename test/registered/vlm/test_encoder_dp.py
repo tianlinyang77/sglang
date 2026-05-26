@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.kits.mmmu_vlm_kit import _run_lmms_eval_with_retry
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -15,6 +15,12 @@ from sglang.test.test_utils import (
     is_in_amd_ci,
     is_in_ci,
     popen_launch_server,
+)
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
+    disabled="DCU multi-device/VLM path needs local model mapping and dedicated real-device validation.",
 )
 
 register_cuda_ci(est_time=500, suite="nightly-4-gpu", nightly=True)

@@ -3,7 +3,7 @@ import unittest
 
 import torch
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.runners import HFRunner, SRTRunner
 from sglang.test.test_utils import CustomTestCase
 
@@ -26,6 +26,12 @@ from sglang.test.test_utils import CustomTestCase
 
 register_cuda_ci(est_time=103, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=132, suite="stage-b-test-1-gpu-small-amd-nondeterministic")
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-dcu",
+    disabled="DCU PR baseline deferred: model matrix path needs local model mapping and BW1000 repeat validation.",
+)
 
 MODELS = [
     ("LxzGordon/URM-LLaMa-3.1-8B", 1, 4e-2),
