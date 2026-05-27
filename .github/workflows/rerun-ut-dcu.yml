@@ -1,0 +1,113 @@
+name: Rerun UT (DCU)
+run-name: ${{ inputs.pr_head_sha && format('[rerun-ut-dcu] {0}', inputs.pr_head_sha) || '[rerun-ut-dcu]' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_command:
+        description: "Test command to run from test/ (e.g. 'registered/dcu/interface/test_dcu_smoke.py TestDCUSmoke.test_import_sglang')"
+        required: true
+        type: string
+      pr_head_sha:
+        description: "PR head SHA to checkout (for /rerun-ut on fork PRs)"
+        required: false
+        type: string
+        default: ""
+      runner_label:
+        description: "Optional DCU runner label override"
+        required: false
+        type: string
+        default: ""
+      image:
+        description: "Optional DCU CI container image override"
+        required: false
+        type: string
+        default: ""
+
+env:
+  SGLANG_IS_IN_CI: true
+
+permissions:
+  actions: write
+  contents: read
+  issues: read
+
+jobs:
+  validate-config:
+    name: Validate DCU config
+    runs-on: ubuntu-latest
+    outputs:
+      runner_label: ${{ steps.resolve.outputs.runner_label }}
+      image: ${{ steps.resolve.outputs.image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr_head_sha || github.sha }}
+
+      - uses: ./.github/actions/check-maintenance
+
+      - name: Resolve DCU runner and image
+        id: resolve
+        env:
+          INPUT_RUNNER_LABEL: ${{ inputs.runner_label || '' }}
+          INPUT_IMAGE: ${{ inputs.image || '' }}
+          VAR_RUNNER_LABEL: ${{ vars.DCU_CI_RUNNER_LABEL || '' }}
+          VAR_IMAGE: ${{ vars.DCU_CI_IMAGE || '' }}
+        run: |
+          runner_label="${INPUT_RUNNER_LABEL:-${VAR_RUNNER_LABEL}}"
+          image="${INPUT_IMAGE:-${VAR_IMAGE}}"
+
+          if [[ -z "${runner_label}" ]]; then
+            echo "::error::DCU runner label is required. Set vars.DCU_CI_RUNNER_LABEL or workflow input runner_label."
+            exit 1
+          fi
+
+          if [[ -z "${image}" ]]; then
+            echo "::error::DCU CI image is required. Set vars.DCU_CI_IMAGE or workflow input image."
+            exit 1
+          fi
+
+          echo "runner_label=${runner_label}" >> "${GITHUB_OUTPUT}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify DCU registration
+        run: python3 scripts/ci/dcu/verify_dcu_registration.py
+
+  rerun-ut-dcu:
+    name: Rerun UT (DCU)
+    needs: validate-config
+    runs-on: ${{ needs.validate-config.outputs.runner_label }}
+    timeout-minutes: 120
+    env:
+      DCU_CI_IMAGE: ${{ needs.validate-config.outputs.image }}
+      DCU_CI_CONTAINER_NAME: ci_sglang_dcu_${{ github.run_id }}_rerun_ut
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr_head_sha || github.sha }}
+
+      - name: Setup DCU container
+        run: bash scripts/ci/dcu/dcu_ci_start_container.sh --image "${DCU_CI_IMAGE}" --container-name "${DCU_CI_CONTAINER_NAME}"
+
+      - name: Install dependencies
+        run: bash scripts/ci/dcu/dcu_ci_install_dependency.sh
+
+      - name: Run test
+        timeout-minutes: 60
+        run: |
+          cd test/
+          bash ../scripts/ci/dcu/dcu_ci_exec.sh -w /sglang-checkout/test --container-name "${DCU_CI_CONTAINER_NAME}" -- \
+            python3 ${{ inputs.test_command }}
+
+      - name: Cleanup DCU container
+        if: always()
+        run: |
+          if docker ps -a --format '{{.Names}}' | grep -Fxq "${DCU_CI_CONTAINER_NAME}"; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker exec "${DCU_CI_CONTAINER_NAME}" bash -lc \
+              "find /sglang-checkout -name __pycache__ -type d -prune -exec rm -rf {} + || true; find /sglang-checkout -name '*.pyc' -delete || true; chown -R ${host_uid}:${host_gid} /sglang-checkout || true"
+            docker rm -f "${DCU_CI_CONTAINER_NAME}"
+          fi
