@@ -83,6 +83,26 @@ Observed results:
 - Workflow YAML parsing passed.
 - `git diff --check` passed.
 
+## GitHub PR E2E Validation
+
+The minimal official-flow validation passed on the real self-hosted DCU runner:
+
+- PR: `https://github.com/tianlinyang77/sglang/pull/3`
+- Run: `https://github.com/tianlinyang77/sglang/actions/runs/26491420044`
+- Commit: `b0902c4535e5`
+- Event: `pull_request` / `synchronize`
+- Result: success
+
+Successful jobs:
+
+- `Check changes`
+- `Call PR gate / pr-gate`
+- `Validate DCU config`
+- `Stage A DCU smoke`
+- `Stage B DCU smoke (0)`
+- `Stage B DCU smoke (1)`
+- `PR Test (DCU) finish`
+
 ## Not In This Step
 
 - Expanding all enabled DCU tests into required PR signal.
