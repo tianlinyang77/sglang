@@ -39,13 +39,17 @@ Stage A is intentionally narrowed to the DCU framework smoke file:
 
 - `test/registered/dcu/interface/test_dcu_smoke.py`
 
-Stage B matrix is intentionally narrowed to two previously validated files:
+Stage B matrix is intentionally narrowed to two CI-flow smoke files:
 
-- `test/registered/dcu/srt/bw1000/test_qwen25_0p5b_server_dcu.py`
-- `test/registered/dcu/srt/bw1000/test_qwen25_1p5b_server_dcu.py`
+- `test/registered/dcu/interface/test_dcu_stage_b_flow_0.py`
+- `test/registered/dcu/interface/test_dcu_stage_b_flow_1.py`
 
 With `--auto-partition-size 2`, each matrix partition selects one file. This
 keeps the first official-flow validation focused on CI mechanics.
+
+The Qwen2.5 server files remain registered in the tree, but they are not used
+as PR-required baseline in this validation step because the current DCU image
+failed server startup with `ModuleNotFoundError: aiter.ops.triton.gemm`.
 
 ## Required Repository Variables
 
@@ -63,18 +67,19 @@ Optional for test repository debugging:
 python3 -m py_compile test/run_suite.py scripts/ci/utils/slash_command_handler.py scripts/ci/dcu/verify_dcu_registration.py
 python3 scripts/ci/dcu/verify_dcu_registration.py
 PYTHONPATH=python python3 test/run_suite.py --hw dcu --suite stage-a-test-1-gpu-small-dcu --include-file registered/dcu/interface/test_dcu_smoke.py --list
-PYTHONPATH=python python3 test/run_suite.py --hw dcu --suite stage-b-test-1-gpu-small-dcu --include-file registered/dcu/srt/bw1000/test_qwen25_0p5b_server_dcu.py --include-file registered/dcu/srt/bw1000/test_qwen25_1p5b_server_dcu.py --auto-partition-id 0 --auto-partition-size 2 --list
-PYTHONPATH=python python3 test/run_suite.py --hw dcu --suite stage-b-test-1-gpu-small-dcu --include-file registered/dcu/srt/bw1000/test_qwen25_0p5b_server_dcu.py --include-file registered/dcu/srt/bw1000/test_qwen25_1p5b_server_dcu.py --auto-partition-id 1 --auto-partition-size 2 --list
+PYTHONPATH=python python3 test/run_suite.py --hw dcu --suite stage-b-test-1-gpu-small-dcu --include-file registered/dcu/interface/test_dcu_stage_b_flow_0.py --include-file registered/dcu/interface/test_dcu_stage_b_flow_1.py --auto-partition-id 0 --auto-partition-size 2 --list
+PYTHONPATH=python python3 test/run_suite.py --hw dcu --suite stage-b-test-1-gpu-small-dcu --include-file registered/dcu/interface/test_dcu_stage_b_flow_0.py --include-file registered/dcu/interface/test_dcu_stage_b_flow_1.py --auto-partition-id 1 --auto-partition-size 2 --list
 python3 -c "import pathlib, yaml; [yaml.safe_load(path.read_text()) for path in [pathlib.Path('.github/workflows/pr-test-dcu.yml'), pathlib.Path('.github/workflows/pr-gate.yml'), pathlib.Path('.github/workflows/rerun-ut-dcu.yml')]]; print('workflow yaml ok')"
 git diff --check
 ```
 
 Observed results:
 
-- DCU registration is healthy: `203` DCU registered test files collected.
+- DCU registration is healthy: `16` DCU registered test files collected in
+  this minimal validation branch.
 - Stage A dry-run selected `1` enabled file: `test_dcu_smoke.py`.
-- Stage B partition `0/2` selected `test_qwen25_1p5b_server_dcu.py`.
-- Stage B partition `1/2` selected `test_qwen25_0p5b_server_dcu.py`.
+- Stage B partition `0/2` selected `test_dcu_stage_b_flow_0.py`.
+- Stage B partition `1/2` selected `test_dcu_stage_b_flow_1.py`.
 - Workflow YAML parsing passed.
 - `git diff --check` passed.
 
@@ -83,5 +88,5 @@ Observed results:
 - Expanding all enabled DCU tests into required PR signal.
 - Solving remaining disabled/deferred tests.
 - Enabling slash-command policy, CODEOWNERS, PR template, or merge-oncall flow.
-- Proving the self-hosted runner execution in GitHub Actions. That remains the
-  next validation step after pushing this branch.
+- Promoting Qwen2.5 SRT server files to required PR baseline before the DCU
+  runtime image provides the needed `aiter.ops.triton.gemm` module.

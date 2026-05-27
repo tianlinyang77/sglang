@@ -323,18 +323,18 @@ jobs:
         run: bash scripts/ci/dcu/dcu_ci_install_dependency.sh
 
       - name: Run stage-b-test-1-gpu-small-dcu partition
-        timeout-minutes: 180
+        timeout-minutes: 30
         run: |
           echo "Running stage-b-test-1-gpu-small-dcu partition ${{ matrix.part }}/2"
           bash scripts/ci/dcu/dcu_ci_exec.sh -w /sglang-checkout/test --container-name "${DCU_CI_CONTAINER_NAME}" -- \
             python3 run_suite.py \
               --hw dcu \
               --suite stage-b-test-1-gpu-small-dcu \
-              --include-file registered/dcu/srt/bw1000/test_qwen25_0p5b_server_dcu.py \
-              --include-file registered/dcu/srt/bw1000/test_qwen25_1p5b_server_dcu.py \
+              --include-file registered/dcu/interface/test_dcu_stage_b_flow_0.py \
+              --include-file registered/dcu/interface/test_dcu_stage_b_flow_1.py \
               --auto-partition-id ${{ matrix.part }} \
               --auto-partition-size 2 \
-              --timeout-per-file 1800 \
+              --timeout-per-file 120 \
               ${{ needs.validate-config.outputs.continue_on_error_flag }}
 
       - name: Cleanup DCU container
