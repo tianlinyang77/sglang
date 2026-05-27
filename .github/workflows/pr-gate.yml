@@ -9,6 +9,14 @@ on:
         description: "Cooldown period in minutes for low-permission users; 0 disables rate limiting"
         type: number
         default: 120
+      workflow-id:
+        description: "Workflow file name used for cooldown lookup"
+        type: string
+        default: pr-test.yml
+      resource-gate-jobs:
+        description: "Comma-separated job names that do not count as resource-consuming CI"
+        type: string
+        default: check-changes,pr-gate,call-gate,pr-test-finish
 
 jobs:
   pr-gate:
@@ -42,6 +50,8 @@ jobs:
           echo "PR User: ${{ steps.pr.outputs.user }}"
           echo "Require run-ci: ${{ inputs.require-run-ci }}"
           echo "Cool down minutes: ${{ inputs.cool-down-minutes }}"
+          echo "Workflow ID: ${{ inputs.workflow-id }}"
+          echo "Resource gate jobs: ${{ inputs.resource-gate-jobs }}"
           echo "==================="
 
       - name: Block draft PR
@@ -149,7 +159,7 @@ jobs:
             const { data } = await github.rest.actions.listWorkflowRuns({
               owner,
               repo,
-              workflow_id: 'pr-test.yml',
+              workflow_id: '${{ inputs.workflow-id }}',
               event: eventName,
               per_page: 100,
             });
@@ -181,7 +191,10 @@ jobs:
                 }
 
                 // Gate jobs that don't consume significant CI resources
-                const gateJobs = ['check-changes', 'pr-gate', 'call-gate', 'pr-test-finish'];
+                const gateJobs = '${{ inputs.resource-gate-jobs }}'
+                  .split(',')
+                  .map(name => name.trim())
+                  .filter(Boolean);
                 const jobsBeyondGate = jobs.filter(j => !gateJobs.some(g => j.name === g || j.name.startsWith(g + ' ')));
 
                 // A job "ran" if it reached a terminal conclusion state that indicates actual execution

@@ -89,6 +89,8 @@ docker run -dt --user root --privileged \
   -e HF_HUB_DOWNLOAD_TIMEOUT=300 \
   -e ROCM_PATH="${DTK_ROOT}" \
   -e LD_LIBRARY_PATH="${DCU_LD_LIBRARY_PATH}" \
+  -e SGLANG_IS_IN_CI=1 \
+  -e SGLANG_IS_IN_CI_DCU=1 \
   -e SGLANG_USE_AITER=0 \
   -e SGLANG_ROCM_USE_AITER_MOE=0 \
   --security-opt seccomp=unconfined \

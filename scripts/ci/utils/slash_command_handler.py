@@ -286,8 +286,15 @@ def handle_rerun_stage(
         "stage-c-test-large-8-gpu-amd-mi35x",
     ]
 
-    valid_stages = nvidia_stages + amd_stages
+    # Valid DCU stage names that support target_stage in PR Test (DCU).
+    dcu_stages = [
+        "stage-a-test-1-gpu-small-dcu",
+        "stage-b-test-1-gpu-small-dcu",
+    ]
+
+    valid_stages = nvidia_stages + amd_stages + dcu_stages
     is_amd_stage = stage_name in amd_stages
+    is_dcu_stage = stage_name in dcu_stages
 
     if stage_name not in valid_stages:
         comment.create_reaction("confused")
@@ -297,13 +304,20 @@ def handle_rerun_stage(
             + "\n".join(f"- `{s}`" for s in nvidia_stages)
             + "\n\n**AMD stages:**\n"
             + "\n".join(f"- `{s}`" for s in amd_stages)
+            + "\n\n**DCU stages:**\n"
+            + "\n".join(f"- `{s}`" for s in dcu_stages)
             + "\n\nOther stages will be added soon. For now, use `/rerun-failed-ci` for those stages."
         )
         return False
 
     try:
         # Get the appropriate workflow based on stage type
-        workflow_name = "PR Test (AMD)" if is_amd_stage else "PR Test"
+        if is_dcu_stage:
+            workflow_name = "PR Test (DCU)"
+        elif is_amd_stage:
+            workflow_name = "PR Test (AMD)"
+        else:
+            workflow_name = "PR Test"
         workflows = gh_repo.get_workflows()
         target_workflow = None
         for wf in workflows:
@@ -510,10 +524,59 @@ def detect_cuda_suite(file_path_from_test):
     return suite, runner, use_deepep, None
 
 
+def detect_dcu_suite(file_path_from_test):
+    """
+    Read a test file and extract the suite from register_dcu_ci(suite="...").
+
+    Returns (suite_name, error_message).
+    """
+    full_path = f"test/{file_path_from_test}"
+    with open(full_path, "r") as f:
+        content = f.read()
+
+    match = re.search(
+        r'register_dcu_ci\([^)]*suite\s*=\s*["\']([^"\']+)["\']', content
+    )
+    if not match:
+        return (
+            None,
+            (
+                f"No `register_dcu_ci()` found in `{full_path}`.\n\n"
+                f"This file may not be a registered DCU CI test."
+            ),
+        )
+
+    suite = match.group(1)
+    known_suites = {
+        "stage-a-test-1-gpu-small-dcu",
+        "stage-b-test-1-gpu-small-dcu",
+        "stage-b-test-1-gpu-large-dcu",
+        "stage-b-test-2-gpu-large-dcu",
+        "stage-c-test-large-8-gpu-dcu",
+        "nightly-dcu",
+        "nightly-dcu-1-gpu",
+        "nightly-dcu-4-gpu",
+        "nightly-dcu-8-gpu",
+        "nightly-dcu-accuracy",
+        "nightly-dcu-perf",
+        "nightly-dcu-vlm",
+    }
+    if suite not in known_suites:
+        known = ", ".join(f"`{s}`" for s in sorted(known_suites))
+        return (
+            suite,
+            (
+                f"Unknown DCU suite `{suite}` in `{full_path}`.\n\n"
+                f"Known suites: {known}"
+            ),
+        )
+    return suite, None
+
+
 def handle_rerun_ut(gh_repo, pr, comment, user_perms, test_spec, token):
     """
     Handles the /rerun-ut <file>::<TestClass.test_method> command.
-    Dispatches a lightweight workflow to run a single test on the correct CUDA runner.
+    Dispatches a lightweight workflow to run a single CUDA or DCU registered test.
     """
     # SECURITY: For fork PRs, only allow /rerun-ut if the commenter has write+ permission.
     # This command checks out and executes code from the PR branch on self-hosted GPU
@@ -569,12 +632,24 @@ def handle_rerun_ut(gh_repo, pr, comment, user_perms, test_spec, token):
         pr.create_issue_comment(f"❌ {err}")
         return False
 
-    # Detect suite and runner
+    # Detect suite and runner. CUDA uses explicit runner mapping; DCU resolves
+    # runner/image from repository variables in the dedicated workflow.
     suite, runner_label, use_deepep, err = detect_cuda_suite(resolved_path)
+    is_dcu_test = False
     if err:
-        comment.create_reaction("confused")
-        pr.create_issue_comment(f"❌ {err}")
-        return False
+        dcu_suite, dcu_err = detect_dcu_suite(resolved_path)
+        if dcu_err:
+            comment.create_reaction("confused")
+            pr.create_issue_comment(
+                "❌ The requested file is not a supported CUDA or DCU registered CI test.\n\n"
+                f"CUDA detection:\n{err}\n\n"
+                f"DCU detection:\n{dcu_err}"
+            )
+            return False
+        suite = dcu_suite
+        runner_label = "DCU_CI_RUNNER_LABEL"
+        use_deepep = False
+        is_dcu_test = True
 
     # Build test_command: file path (+ optional test selector as unittest arg)
     test_command = resolved_path
@@ -583,11 +658,12 @@ def handle_rerun_ut(gh_repo, pr, comment, user_perms, test_spec, token):
 
     print(
         f"Resolved: file={resolved_path}, selector={test_selector}, "
-        f"suite={suite}, runner={runner_label}, deepep={use_deepep}, command='{test_command}'"
+        f"suite={suite}, runner={runner_label}, deepep={use_deepep}, "
+        f"dcu={is_dcu_test}, command='{test_command}'"
     )
 
     try:
-        workflow_name = "Rerun UT"
+        workflow_name = "Rerun UT (DCU)" if is_dcu_test else "Rerun UT"
         workflows = gh_repo.get_workflows()
         target_workflow = None
         for wf in workflows:
@@ -608,19 +684,28 @@ def handle_rerun_ut(gh_repo, pr, comment, user_perms, test_spec, token):
         if is_fork:
             ref = "main"
             pr_head_sha = pr.head.sha
-            inputs = {
-                "test_command": test_command,
-                "runner_label": runner_label,
-                "pr_head_sha": pr_head_sha,
-                "use_deepep": str(use_deepep).lower(),
-            }
+            if is_dcu_test:
+                inputs = {
+                    "test_command": test_command,
+                    "pr_head_sha": pr_head_sha,
+                }
+            else:
+                inputs = {
+                    "test_command": test_command,
+                    "runner_label": runner_label,
+                    "pr_head_sha": pr_head_sha,
+                    "use_deepep": str(use_deepep).lower(),
+                }
         else:
             ref = pr.head.ref
-            inputs = {
-                "test_command": test_command,
-                "runner_label": runner_label,
-                "use_deepep": str(use_deepep).lower(),
-            }
+            if is_dcu_test:
+                inputs = {"test_command": test_command}
+            else:
+                inputs = {
+                    "test_command": test_command,
+                    "runner_label": runner_label,
+                    "use_deepep": str(use_deepep).lower(),
+                }
 
         dispatch_time = time.time()
 
@@ -649,7 +734,7 @@ def handle_rerun_ut(gh_repo, pr, comment, user_perms, test_spec, token):
                 gh_repo,
                 target_workflow.id,
                 ref,
-                "rerun-ut",
+                "rerun-ut-dcu" if is_dcu_test else "rerun-ut",
                 token,
                 dispatch_time,
                 pr_head_sha=pr_head_sha,

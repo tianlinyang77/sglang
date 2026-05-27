@@ -1,19 +1,9 @@
 name: PR Test (DCU)
+# Dynamic run-name for /rerun-stage commands to enable URL lookup.
+# Format: "[stage-name] sha" for fork PRs, "[stage-name]" for non-fork PRs.
+run-name: ${{ (inputs.target_stage || inputs.target_stage_select) && (inputs.pr_head_sha && format('[{0}] {1}', inputs.target_stage || inputs.target_stage_select, inputs.pr_head_sha) || format('[{0}]', inputs.target_stage || inputs.target_stage_select)) || '' }}
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/pr-test-dcu.yml"
-      - ".github/workflows/pr-gate.yml"
-      - ".github/actions/**"
-      - "scripts/ci/dcu/**"
-      - "scripts/ci/utils/**"
-      - "python/pyproject*.toml"
-      - "python/sglang/**"
-      - "test/run_suite.py"
-      - "test/registered/**"
-      - "sgl-kernel/**"
   pull_request:
     types:
       - opened
@@ -21,7 +11,8 @@ on:
       - reopened
       - labeled
       - ready_for_review
-    branches: [main]
+    branches:
+      - main
     paths:
       - ".github/workflows/pr-test-dcu.yml"
       - ".github/workflows/pr-gate.yml"
@@ -35,15 +26,20 @@ on:
       - "sgl-kernel/**"
   workflow_dispatch:
     inputs:
-      target_stage:
-        description: "DCU stage to run"
+      target_stage_select:
+        description: "Select a DCU stage to run from dropdown (leave empty for auto-detect)"
         required: false
         type: choice
-        default: all
+        default: ""
         options:
-          - all
+          - ""
           - stage-a-test-1-gpu-small-dcu
           - stage-b-test-1-gpu-small-dcu
+      target_stage:
+        description: "Or type comma-separated DCU stage names (overrides dropdown if non-empty)"
+        required: false
+        type: string
+        default: ""
       ref:
         description: "Git ref, branch, tag, or SHA to test"
         required: false
@@ -104,7 +100,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: pr-test-dcu-${{ github.event_name }}-${{ github.head_ref || github.ref_name || 'default' }}-${{ inputs.pr_head_sha || inputs.ref || 'current' }}-${{ inputs.target_stage || 'all' }}
+  group: pr-test-dcu-${{ github.event_name }}-${{ github.head_ref || github.ref_name || 'default' }}-${{ inputs.pr_head_sha || inputs.ref || 'current' }}-${{ inputs.target_stage || inputs.target_stage_select || 'all' }}
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
 
 jobs:
@@ -138,44 +134,65 @@ jobs:
       - name: Detect DCU-relevant changes
         id: filter
         if: steps.run-mode.outputs.run_all_tests != 'true'
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            dcu:
-              - ".github/workflows/pr-test-dcu.yml"
-              - ".github/workflows/pr-gate.yml"
-              - ".github/actions/**"
-              - "scripts/ci/dcu/**"
-              - "scripts/ci/utils/**"
-              - "python/pyproject*.toml"
-              - "python/sglang/**"
-              - "test/run_suite.py"
-              - "python/sglang/test/ci/**"
-              - "test/registered/**"
-              - "sgl-kernel/**"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ -z "${BASE_SHA}" ]]; then
+            echo "dcu=true" >> "${GITHUB_OUTPUT}"
+            echo "No pull request base SHA; treating as DCU-relevant."
+            exit 0
+          fi
+
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}" "${HEAD_SHA}"
+          changed_files="$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}")"
+          echo "${changed_files}"
+
+          if echo "${changed_files}" | grep -Eq '^(\.github/workflows/pr-test-dcu\.yml|\.github/workflows/pr-gate\.yml|\.github/actions/|scripts/ci/dcu/|scripts/ci/utils/|python/pyproject.*\.toml|python/sglang/|test/run_suite\.py|python/sglang/test/ci/|test/registered/|sgl-kernel/)'; then
+            echo "dcu=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "dcu=false" >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Select DCU stages
         id: plan
         env:
           EVENT_NAME: ${{ github.event_name }}
-          TARGET_STAGE: ${{ inputs.target_stage || 'all' }}
+          TARGET_STAGE: ${{ inputs.target_stage || inputs.target_stage_select || '' }}
         run: |
-          if [[ "${EVENT_NAME}" == "workflow_dispatch" && "${TARGET_STAGE}" == "stage-a-test-1-gpu-small-dcu" ]]; then
-            echo "run_stage_a=true" >> "${GITHUB_OUTPUT}"
-            echo "run_stage_b=false" >> "${GITHUB_OUTPUT}"
-          elif [[ "${EVENT_NAME}" == "workflow_dispatch" && "${TARGET_STAGE}" == "stage-b-test-1-gpu-small-dcu" ]]; then
-            echo "run_stage_a=false" >> "${GITHUB_OUTPUT}"
-            echo "run_stage_b=true" >> "${GITHUB_OUTPUT}"
-          else
+          if [[ "${EVENT_NAME}" != "workflow_dispatch" || -z "${TARGET_STAGE}" || "${TARGET_STAGE}" == "all" ]]; then
             echo "run_stage_a=true" >> "${GITHUB_OUTPUT}"
             echo "run_stage_b=true" >> "${GITHUB_OUTPUT}"
+            exit 0
           fi
+
+          requested=",${TARGET_STAGE},"
+          run_stage_a=false
+          run_stage_b=false
+
+          if [[ "${requested}" == *",stage-a-test-1-gpu-small-dcu,"* ]]; then
+            run_stage_a=true
+          fi
+          if [[ "${requested}" == *",stage-b-test-1-gpu-small-dcu,"* ]]; then
+            run_stage_b=true
+          fi
+
+          if [[ "${run_stage_a}" == "false" && "${run_stage_b}" == "false" ]]; then
+            echo "::error::Unknown DCU target_stage '${TARGET_STAGE}'. Valid values: stage-a-test-1-gpu-small-dcu, stage-b-test-1-gpu-small-dcu, or comma-separated combination."
+            exit 1
+          fi
+
+          echo "run_stage_a=${run_stage_a}" >> "${GITHUB_OUTPUT}"
+          echo "run_stage_b=${run_stage_b}" >> "${GITHUB_OUTPUT}"
 
   call-gate:
     name: Call PR gate
     needs: check-changes
     if: github.event_name == 'pull_request' && needs.check-changes.outputs.dcu == 'true'
     uses: ./.github/workflows/pr-gate.yml
+    with:
+      workflow-id: pr-test-dcu.yml
+      resource-gate-jobs: check-changes,Check changes,pr-gate,PR gate,call-gate,Call PR gate,validate-config,Validate DCU config,PR Test (DCU) finish
     secrets: inherit
 
   validate-config:
@@ -200,7 +217,7 @@ jobs:
         env:
           INPUT_RUNNER_LABEL: ${{ inputs.runner_label || '' }}
           INPUT_IMAGE: ${{ inputs.image || '' }}
-          VAR_RUNNER_LABEL: ${{ vars.DCU_CI_RUNNER_LABEL || 'linux-dcu-k100-1' }}
+          VAR_RUNNER_LABEL: ${{ vars.DCU_CI_RUNNER_LABEL || '' }}
           VAR_IMAGE: ${{ vars.DCU_CI_IMAGE || '' }}
           CONTINUE_ON_ERROR: ${{ inputs.continue_on_error || false }}
         run: |
@@ -259,12 +276,20 @@ jobs:
             python3 run_suite.py \
               --hw dcu \
               --suite stage-a-test-1-gpu-small-dcu \
-              --timeout-per-file 1800 \
+              --include-file registered/dcu/interface/test_dcu_smoke.py \
+              --timeout-per-file 120 \
               ${{ needs.validate-config.outputs.continue_on_error_flag }}
 
-      - name: Stop DCU container
+      - name: Cleanup DCU container
         if: always()
-        run: docker rm -f "${DCU_CI_CONTAINER_NAME}" || true
+        run: |
+          if docker ps -a --format '{{.Names}}' | grep -Fxq "${DCU_CI_CONTAINER_NAME}"; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker exec "${DCU_CI_CONTAINER_NAME}" bash -lc \
+              "find /sglang-checkout -name __pycache__ -type d -prune -exec rm -rf {} + || true; find /sglang-checkout -name '*.pyc' -delete || true; chown -R ${host_uid}:${host_gid} /sglang-checkout || true"
+            docker rm -f "${DCU_CI_CONTAINER_NAME}"
+          fi
 
   stage-b-test-1-gpu-small-dcu:
     name: Stage B DCU smoke (${{ matrix.part }})
@@ -303,14 +328,23 @@ jobs:
             python3 run_suite.py \
               --hw dcu \
               --suite stage-b-test-1-gpu-small-dcu \
+              --include-file registered/dcu/srt/bw1000/test_qwen25_0p5b_server_dcu.py \
+              --include-file registered/dcu/srt/bw1000/test_qwen25_1p5b_server_dcu.py \
               --auto-partition-id ${{ matrix.part }} \
               --auto-partition-size 2 \
               --timeout-per-file 1800 \
               ${{ needs.validate-config.outputs.continue_on_error_flag }}
 
-      - name: Stop DCU container
+      - name: Cleanup DCU container
         if: always()
-        run: docker rm -f "${DCU_CI_CONTAINER_NAME}" || true
+        run: |
+          if docker ps -a --format '{{.Names}}' | grep -Fxq "${DCU_CI_CONTAINER_NAME}"; then
+            host_uid="$(id -u)"
+            host_gid="$(id -g)"
+            docker exec "${DCU_CI_CONTAINER_NAME}" bash -lc \
+              "find /sglang-checkout -name __pycache__ -type d -prune -exec rm -rf {} + || true; find /sglang-checkout -name '*.pyc' -delete || true; chown -R ${host_uid}:${host_gid} /sglang-checkout || true"
+            docker rm -f "${DCU_CI_CONTAINER_NAME}"
+          fi
 
   pr-test-dcu-finish:
     name: PR Test (DCU) finish
