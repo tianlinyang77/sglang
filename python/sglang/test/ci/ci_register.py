@@ -13,6 +13,7 @@ __all__ = [
     "register_cuda_ci",
     "register_amd_ci",
     "register_npu_ci",
+    "register_dcu_ci",
     "ut_parse_one_file",
 ]
 
@@ -25,6 +26,7 @@ class HWBackend(Enum):
     CUDA = auto()
     AMD = auto()
     NPU = auto()
+    DCU = auto()
 
 
 @dataclass
@@ -75,11 +77,22 @@ def register_npu_ci(
     return None
 
 
+def register_dcu_ci(
+    est_time: float,
+    suite: str,
+    nightly: bool = False,
+    disabled: Optional[str] = None,
+):
+    """Marker for DCU CI registration (parsed via AST; runtime no-op)."""
+    return None
+
+
 REGISTER_MAPPING = {
     "register_cpu_ci": HWBackend.CPU,
     "register_cuda_ci": HWBackend.CUDA,
     "register_amd_ci": HWBackend.AMD,
     "register_npu_ci": HWBackend.NPU,
+    "register_dcu_ci": HWBackend.DCU,
 }
 
 
@@ -193,7 +206,7 @@ class RegistryVisitor(ast.NodeVisitor):
 
 
 def ut_parse_one_file(filename: str) -> List[CIRegistry]:
-    with open(filename, "r") as f:
+    with open(filename, "r", encoding="utf-8") as f:
         file_content = f.read()
     tree = ast.parse(file_content, filename=filename)
     visitor = RegistryVisitor(filename=filename)

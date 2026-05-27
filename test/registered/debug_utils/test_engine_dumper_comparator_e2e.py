@@ -28,7 +28,7 @@ pytestmark = pytest.mark.filterwarnings(
 )
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
@@ -41,6 +41,13 @@ register_amd_ci(
     suite="nightly-amd-4-gpu",
     nightly=True,
     disabled="TP=2 vs TP=4 numerical mismatch on AMD (comparator fails tolerance check)",
+)
+
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
+    disabled="BW1000 quick validation failed: Qwen/Qwen3-30B-A3B launches with --tp 2 while quick run exposes one GPU, causing HIP invalid device ordinal and server exit code -9.",
 )
 
 MODEL = "Qwen/Qwen3-30B-A3B"

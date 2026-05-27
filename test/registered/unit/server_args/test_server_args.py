@@ -4,13 +4,16 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from sglang.srt.server_args import PortArgs, ServerArgs, prepare_server_args
-from sglang.test.ci.ci_register import register_cpu_ci
+from sglang.test.ci.ci_register import register_cpu_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
     CustomTestCase,
 )
 
 register_cpu_ci(est_time=1, suite="stage-a-test-cpu")
+
+# DCU BW1000 validated on 10.16.1.66/dxl-sglang: three-pass PR-gate smoke passed.
+register_dcu_ci(est_time=30, suite="stage-b-test-1-gpu-small-dcu")
 
 # Mock get_device() so all tests run on CPU-only CI runners
 _mock_device = patch("sglang.srt.server_args.get_device", return_value="cuda")

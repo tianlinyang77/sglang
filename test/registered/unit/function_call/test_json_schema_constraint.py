@@ -16,10 +16,13 @@ from sglang.srt.function_call.utils import (
     _get_tool_schema_defs,
     get_json_schema_constraint,
 )
-from sglang.test.ci.ci_register import register_cpu_ci
+from sglang.test.ci.ci_register import register_cpu_ci, register_dcu_ci
 
 register_cpu_ci(1.0, "stage-a-test-cpu")
 
+
+# DCU BW1000 validated on 10.16.1.66/dxl-sglang: three-pass PR-gate smoke passed.
+register_dcu_ci(est_time=30, suite="stage-b-test-1-gpu-small-dcu")
 
 class TestJsonSchemaConstraint(unittest.TestCase):
     """Test JSON schema constraint generation for tool choices"""

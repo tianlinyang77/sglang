@@ -4,11 +4,16 @@ from unittest.mock import Mock
 
 from sglang.srt.entrypoints.openai.protocol import V1RerankReqInput
 from sglang.srt.managers.tokenizer_manager_multiitem_mixin import ScoreResult
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 
 # Keep consistent with other openai_server/basic unit tests.
 register_cuda_ci(est_time=10, suite="stage-b-test-1-gpu-large")
 register_amd_ci(est_time=10, suite="stage-b-test-1-gpu-small-amd")
+
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+)
 
 try:
     from sglang.srt.entrypoints.openai.serving_rerank import (

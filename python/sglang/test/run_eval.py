@@ -94,7 +94,9 @@ def run_eval(args):
     if args.eval_name == "mmlu":
         from sglang.test.simple_eval_mmlu import MMLUEval
 
-        filename = "https://openaipublic.blob.core.windows.net/simple-evals/mmlu.csv"
+        filename = getattr(args, "dataset_path", None)
+        if filename in (None, "THUDM/LongBench-v2"):
+            filename = "https://openaipublic.blob.core.windows.net/simple-evals/mmlu.csv"
         eval_obj = MMLUEval(filename, args.num_examples, args.num_threads)
     elif args.eval_name == "math":
         from sglang.test.simple_eval_math import MathEval
@@ -150,6 +152,7 @@ def run_eval(args):
             args.num_examples,
             args.num_threads,
             response_answer_regex=getattr(args, "response_answer_regex", None),
+            dataset_path=getattr(args, "dataset_path", None),
         )
     elif args.eval_name == "aime25":
         from sglang.test.simple_eval_aime25 import AIME25Eval

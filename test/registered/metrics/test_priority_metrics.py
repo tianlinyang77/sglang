@@ -1,3 +1,4 @@
+import os
 import unittest
 from typing import Dict, List
 from unittest.mock import Mock
@@ -8,7 +9,7 @@ from prometheus_client.samples import Sample
 
 from sglang.srt.observability.metrics_collector import QueueCount
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
@@ -22,7 +23,15 @@ register_cuda_ci(
 )
 register_amd_ci(est_time=60, suite="stage-b-test-1-gpu-small-amd")
 
-_MODEL_NAME = "Qwen/Qwen3-0.6B"
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu"
+)
+
+_MODEL_NAME = os.environ.get(
+    "SGLANG_TEST_PRIORITY_METRICS_MODEL",
+    "/public/opendas/DL_DATA/llm-models/qwen3/Qwen3-0.6B",
+)
 
 
 def _parse_prometheus_metrics(metrics_text: str) -> Dict[str, List[Sample]]:

@@ -8,7 +8,7 @@ import unittest
 
 import openai
 
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.vlm_utils import *
 from sglang.test.vlm_utils import (
     AudioOpenAITestMixin,
@@ -21,6 +21,14 @@ from sglang.test.vlm_utils import (
 
 register_cuda_ci(est_time=957, suite="stage-b-test-1-gpu-large")
 
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+    nightly=False,
+    disabled="DCU CSV CI placeholder: VLM OpenAI server path needs local VLM model mapping before enabling.",
+)
 
 class TestLlavaServer(ImageOpenAITestMixin):
     model = "lmms-lab/llava-onevision-qwen2-0.5b-ov"

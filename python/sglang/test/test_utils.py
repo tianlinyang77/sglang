@@ -48,17 +48,32 @@ from sglang.test.run_eval import run_eval
 from sglang.utils import get_exception_traceback, normalize_base_url
 
 # General test models
-DEFAULT_MODEL_NAME_FOR_TEST = "meta-llama/Llama-3.1-8B-Instruct"
-DEFAULT_SMALL_MODEL_NAME_FOR_TEST = "meta-llama/Llama-3.2-1B-Instruct"
-DEFAULT_SMALL_MODEL_NAME_FOR_TEST_BASE = "meta-llama/Llama-3.2-1B"
-DEFAULT_SMALL_MODEL_NAME_FOR_TEST_SCORE = "Qwen/Qwen3-Reranker-0.6B"
+DEFAULT_MODEL_NAME_FOR_TEST = os.environ.get(
+    "SGLANG_TEST_DEFAULT_MODEL_NAME",
+    "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-7B-Instruct",
+)
+DEFAULT_SMALL_MODEL_NAME_FOR_TEST = os.environ.get(
+    "SGLANG_TEST_DEFAULT_SMALL_MODEL_NAME", "meta-llama/Llama-3.2-1B-Instruct"
+)
+DEFAULT_SMALL_MODEL_NAME_FOR_TEST_BASE = os.environ.get(
+    "SGLANG_TEST_DEFAULT_SMALL_MODEL_NAME_BASE", "meta-llama/Llama-3.2-1B"
+)
+DEFAULT_SMALL_MODEL_NAME_FOR_TEST_SCORE = os.environ.get(
+    "SGLANG_TEST_DEFAULT_SMALL_MODEL_NAME_SCORE", "Qwen/Qwen3-Reranker-0.6B"
+)
 DEFAULT_MOE_MODEL_NAME_FOR_TEST = "mistralai/Mixtral-8x7B-Instruct-v0.1"
 DEFAULT_SMALL_MOE_MODEL_NAME_FOR_TEST_BASE = "Qwen/Qwen1.5-MoE-A2.7B"
 DEFAULT_SMALL_MOE_MODEL_NAME_FOR_TEST_CHAT = "Qwen/Qwen1.5-MoE-A2.7B-Chat"
 
 # MLA test models
-DEFAULT_SMALL_EMBEDDING_MODEL_NAME_FOR_TEST = "Alibaba-NLP/gte-Qwen2-1.5B-instruct"
-DEFAULT_SMALL_CROSS_ENCODER_MODEL_NAME_FOR_TEST = "cross-encoder/ms-marco-MiniLM-L6-v2"
+DEFAULT_SMALL_EMBEDDING_MODEL_NAME_FOR_TEST = os.environ.get(
+    "SGLANG_TEST_DEFAULT_SMALL_EMBEDDING_MODEL_NAME",
+    "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+)
+DEFAULT_SMALL_CROSS_ENCODER_MODEL_NAME_FOR_TEST = os.environ.get(
+    "SGLANG_TEST_DEFAULT_SMALL_CROSS_ENCODER_MODEL_NAME",
+    "cross-encoder/ms-marco-MiniLM-L6-v2",
+)
 DEFAULT_MLA_MODEL_NAME_FOR_TEST = "deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct"
 DEFAULT_MLA_FP8_MODEL_NAME_FOR_TEST = "neuralmagic/DeepSeek-Coder-V2-Lite-Instruct-FP8"
 DEFAULT_MODEL_NAME_FOR_TEST_MLA = "lmsys/sglang-ci-dsv3-test"
@@ -126,14 +141,23 @@ DEFAULT_AUTOROUND_MODEL_NAME_FOR_TEST = (
 DEFAULT_MODEL_NAME_FOR_TEST_LOCAL_ATTENTION = (
     "meta-llama/Llama-4-Scout-17B-16E-Instruct"
 )
-DEFAULT_SMALL_EMBEDDING_MODEL_NAME_FOR_TEST = "Alibaba-NLP/gte-Qwen2-1.5B-instruct"
-DEFAULT_REASONING_MODEL_NAME_FOR_TEST = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+DEFAULT_SMALL_EMBEDDING_MODEL_NAME_FOR_TEST = os.environ.get(
+    "SGLANG_TEST_DEFAULT_SMALL_EMBEDDING_MODEL_NAME",
+    "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+)
+DEFAULT_REASONING_MODEL_NAME_FOR_TEST = os.environ.get(
+    "SGLANG_TEST_DEFAULT_REASONING_MODEL_NAME",
+    "/public/opendas/DL_DATA/llm-models/deepseek-r1/DeepSeek-R1-Distill-Qwen-7B",
+)
 DEFAULT_DEEPEP_MODEL_NAME_FOR_TEST = "deepseek-ai/DeepSeek-V3-0324"
 DEFAULT_DEEPEP_MODEL_NAME_FOR_TEST_NEXTN = "lmsys/DeepSeek-V3-NextN"
 DEFAULT_AWQ_MOE_MODEL_NAME_FOR_TEST = (
     "hugging-quants/Mixtral-8x7B-Instruct-v0.1-AWQ-INT4"
 )
-DEFAULT_ENABLE_THINKING_MODEL_NAME_FOR_TEST = "Qwen/Qwen3-30B-A3B"
+DEFAULT_ENABLE_THINKING_MODEL_NAME_FOR_TEST = os.environ.get(
+    "SGLANG_TEST_DEFAULT_ENABLE_THINKING_MODEL_NAME",
+    "/public/opendas/DL_DATA/llm-models/qwen3/Qwen3-0.6B",
+)
 DEFAULT_DEEPSEEK_W4AFP8_MODEL_FOR_TEST = "Barrrrry/DeepSeek-R1-W4AFP8"
 DEFAULT_ENABLE_ROUTED_EXPERTS_MODEL_NAME_FOR_TEST = "Qwen/Qwen3-30B-A3B"
 
@@ -143,8 +167,12 @@ DEFAULT_MODEL_NAME_FOR_NIGHTLY_EVAL_TP2 = "meta-llama/Llama-3.1-70B-Instruct,mis
 DEFAULT_MODEL_NAME_FOR_NIGHTLY_EVAL_FP8_TP1 = "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8,neuralmagic/Mistral-7B-Instruct-v0.3-FP8,neuralmagic/DeepSeek-Coder-V2-Lite-Instruct-FP8,neuralmagic/gemma-2-2b-it-FP8"
 DEFAULT_MODEL_NAME_FOR_NIGHTLY_EVAL_FP8_TP2 = "neuralmagic/Meta-Llama-3.1-70B-Instruct-FP8,neuralmagic/Mixtral-8x7B-Instruct-v0.1-FP8,neuralmagic/Qwen2-72B-Instruct-FP8,neuralmagic/Qwen2-57B-A14B-Instruct-FP8,neuralmagic/DeepSeek-Coder-V2-Lite-Instruct-FP8,zai-org/GLM-4.5-Air-FP8"
 DEFAULT_MODEL_NAME_FOR_NIGHTLY_EVAL_QUANT_TP1 = "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4,hugging-quants/Meta-Llama-3.1-8B-Instruct-GPTQ-INT4,hugging-quants/Mixtral-8x7B-Instruct-v0.1-AWQ-INT4"
-DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN = "Qwen/Qwen2.5-1.5B-Instruct"
-DEFAULT_SMALL_VLM_MODEL_NAME_FOR_TEST = "Qwen/Qwen2.5-VL-3B-Instruct"
+DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN = os.environ.get(
+    "SGLANG_TEST_DEFAULT_SMALL_QWEN_MODEL_NAME", "Qwen/Qwen2.5-1.5B-Instruct"
+)
+DEFAULT_SMALL_VLM_MODEL_NAME_FOR_TEST = os.environ.get(
+    "SGLANG_TEST_DEFAULT_SMALL_VLM_MODEL_NAME", "Qwen/Qwen2.5-VL-3B-Instruct"
+)
 
 DEFAULT_IMAGE_URL = "https://raw.githubusercontent.com/sgl-project/sglang/main/examples/assets/example_image.png"
 DEFAULT_VIDEO_URL = "https://raw.githubusercontent.com/EvolvingLMMs-Lab/sglang/dev/onevision_local/assets/jobs.mp4"

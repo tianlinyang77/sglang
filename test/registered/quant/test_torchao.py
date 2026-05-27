@@ -3,10 +3,15 @@ import unittest
 import requests
 
 from sglang import Engine
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 
 register_cuda_ci(est_time=103, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=230, suite="stage-b-test-1-gpu-small-amd")
+register_dcu_ci(
+    est_time=230,
+    suite="stage-b-test-1-gpu-small-dcu",
+    disabled="DCU Stage-B deferred: torchao is not installed in the BW1000 CI container; quantization path needs dependency and runtime validation.",
+)
 from sglang.lang.chat_template import get_chat_template_by_model_path
 from sglang.srt.utils import kill_process_tree
 from sglang.test.kits.eval_accuracy_kit import MMLUMixin

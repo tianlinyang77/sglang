@@ -1,5 +1,6 @@
 # Rotary Embedding - MRoPE tests (1-GPU)
 
+import os
 from typing import NamedTuple
 
 import pytest
@@ -18,10 +19,17 @@ from sglang.srt.utils import (
     is_npu,
     is_xpu,
 )
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 
 register_cuda_ci(est_time=10, suite="stage-b-test-1-gpu-large")
 register_amd_ci(est_time=15, suite="stage-b-test-1-gpu-small-amd")
+
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+    disabled="DCU Stage-B deferred: local Qwen2/Qwen2.5 VL configs load offline, but Qwen2VLTextConfig/Qwen2_5_VLTextConfig lack rope_theta and all 32 MRoPE parameterized cases fail on BW1000.",
+)
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
@@ -65,11 +73,23 @@ class MRoPETestInfo(NamedTuple):
 
 TRANSFORMERS_BASE_VERSION = Version(TRANSFORMERS_VERSION).base_version
 
-MODELS_TO_TEST = [
-    MRoPETestInfo(model_name="Qwen/Qwen2-VL-7B-Instruct"),
-    MRoPETestInfo(model_name="Qwen/Qwen2-VL-72B-Instruct"),
-    MRoPETestInfo(model_name="Qwen/Qwen2.5-VL-72B-Instruct"),
-]
+if os.environ.get("SGLANG_IS_IN_CI_DCU"):
+    _dcu_mrope_models = os.environ.get(
+        "SGLANG_TEST_DCU_MROPE_MODELS",
+        "/public/opendas/DL_DATA/llm-models/qwen2/Qwen2-VL-2B-Instruct,"
+        "/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-VL-3B-Instruct",
+    )
+    MODELS_TO_TEST = [
+        MRoPETestInfo(model_name=model.strip())
+        for model in _dcu_mrope_models.split(",")
+        if model.strip()
+    ]
+else:
+    MODELS_TO_TEST = [
+        MRoPETestInfo(model_name="Qwen/Qwen2-VL-7B-Instruct"),
+        MRoPETestInfo(model_name="Qwen/Qwen2-VL-72B-Instruct"),
+        MRoPETestInfo(model_name="Qwen/Qwen2.5-VL-72B-Instruct"),
+    ]
 
 num_tokens_list = [11, 8192]
 

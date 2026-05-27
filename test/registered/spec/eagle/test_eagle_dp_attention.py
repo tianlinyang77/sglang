@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import requests
 
 from sglang.srt.environ import envs
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.few_shot_gsm8k import run_eval as run_eval_few_shot_gsm8k
 from sglang.test.send_one import BenchArgs, send_one_prompt
 from sglang.test.test_utils import (
@@ -24,6 +24,12 @@ from sglang.test.test_utils import (
 register_cuda_ci(est_time=200, suite="stage-c-test-4-gpu-h100")
 register_amd_ci(est_time=200, suite="stage-c-test-4-gpu-amd")
 
+
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+    disabled="DCU RL/speculative path needs local model mapping and quick validation before enabling.",
+)
 
 class TestEAGLE3EngineDPAttention(CustomTestCase):
     @classmethod

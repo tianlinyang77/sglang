@@ -8,6 +8,8 @@ https://arxiv.org/abs/2009.03300
 
 import random
 import re
+from glob import glob
+from os import path
 from typing import Optional
 
 import pandas
@@ -84,10 +86,56 @@ subject2category = {
 }
 
 
+def _normalize_mmlu_parquet_row(row: dict) -> dict:
+    choices = list(row["choices"])
+    if len(choices) < 4:
+        raise ValueError("MMLU parquet row must have at least four choices")
+
+    answer = row["answer"]
+    if isinstance(answer, str):
+        answer = answer.strip()
+        if answer in ["A", "B", "C", "D"]:
+            answer_letter = answer
+        else:
+            answer_letter = chr(ord("A") + int(answer))
+    else:
+        answer_letter = chr(ord("A") + int(answer))
+
+    return {
+        "Question": row["question"],
+        "A": choices[0],
+        "B": choices[1],
+        "C": choices[2],
+        "D": choices[3],
+        "Answer": answer_letter,
+        "Subject": row["subject"],
+    }
+
+
+def _load_mmlu_parquet_root(data_root: str) -> list[dict]:
+    files = []
+    for subject in subject2category:
+        files.extend(sorted(glob(path.join(data_root, subject, "test-*.parquet"))))
+    if not files:
+        files = sorted(glob(path.join(data_root, "*", "test-*.parquet")))
+    if not files:
+        raise FileNotFoundError(f"No MMLU test parquet files found under {data_root}")
+
+    examples = []
+    for filename in files:
+        df = pandas.read_parquet(filename)
+        for _, row in df.iterrows():
+            examples.append(_normalize_mmlu_parquet_row(row.to_dict()))
+    return examples
+
+
 class MMLUEval(Eval):
     def __init__(self, filename: str, num_examples: Optional[int], num_threads: int):
-        df = pandas.read_csv(filename)
-        examples = [row.to_dict() for _, row in df.iterrows()]
+        if path.isdir(filename):
+            examples = _load_mmlu_parquet_root(filename)
+        else:
+            df = pandas.read_csv(filename)
+            examples = [row.to_dict() for _, row in df.iterrows()]
         if num_examples:
             examples = random.Random(0).sample(examples, num_examples)
         self.examples = examples

@@ -1,10 +1,11 @@
 import multiprocessing as mp
+import os
 import random
 import unittest
 
 import torch
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.runners import TEST_RERANK_QUERY_DOCS, HFRunner, SRTRunner
 from sglang.test.test_utils import CustomTestCase, is_in_ci
 
@@ -14,10 +15,29 @@ from sglang.test.test_utils import CustomTestCase, is_in_ci
 register_cuda_ci(est_time=100, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=150, suite="stage-b-test-1-gpu-small-amd")
 
-MODELS = [
-    ("cross-encoder/ms-marco-MiniLM-L6-v2", 1, 1e-2),
-    ("BAAI/bge-reranker-v2-m3", 1, 1e-2),
-]
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+    disabled="DCU Stage-B deferred: local bge-reranker-base mapping added, but HFRunner/SRTRunner cross-encoder comparison hung before DCU allocation on BW1000.",
+)
+
+if os.environ.get("SGLANG_IS_IN_CI_DCU"):
+    MODELS = [
+        (
+            os.environ.get(
+                "SGLANG_TEST_DEFAULT_SMALL_CROSS_ENCODER_MODEL_NAME",
+                "/public/opendas/DL_DATA/llm-models/vllm-optest-models/BAAI/bge-reranker-base",
+            ),
+            1,
+            1e-2,
+        )
+    ]
+else:
+    MODELS = [
+        ("cross-encoder/ms-marco-MiniLM-L6-v2", 1, 1e-2),
+        ("BAAI/bge-reranker-v2-m3", 1, 1e-2),
+    ]
 ATTENTION_BACKEND = ["torch_native", "triton"]
 
 TORCH_DTYPES = [torch.float32]

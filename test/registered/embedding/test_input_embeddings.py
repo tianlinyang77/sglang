@@ -7,7 +7,7 @@ import requests
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -19,6 +19,12 @@ from sglang.test.test_utils import (
 register_cuda_ci(est_time=38, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=38, suite="stage-b-test-1-gpu-small-amd")
 
+
+# DCU BW1000 validated on 10.16.1.66/dxl-sglang: input_embeddings path passed three runs.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+)
 
 class TestInputEmbeds(CustomTestCase):
     @classmethod

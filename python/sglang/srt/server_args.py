@@ -2214,6 +2214,8 @@ class ServerArgs:
                 )
             ):
                 return "trtllm_mha"
+            elif is_dcu():
+                return "fa3"
             elif is_hip():
                 return "aiter"
             elif is_mps():
@@ -2372,6 +2374,17 @@ class ServerArgs:
                 f"FA4 backend only supports page size 128 for non-MLA model architectures, changing page_size from {self.page_size} to 128."
             )
             self.page_size = 128
+
+        if (
+            self.attention_backend == "fa3"
+            and is_dcu()
+            and self.page_size != 64
+            and not self.use_mla_backend()
+        ):
+            logger.warning(
+                f"FA3 backend on DCU requires page size 64 for non-MLA model architectures, changing page_size from {self.page_size} to 64."
+            )
+            self.page_size = 64
 
         # AMD platforms backends
         if self.attention_backend == "aiter":

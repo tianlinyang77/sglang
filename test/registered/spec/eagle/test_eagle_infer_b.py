@@ -11,7 +11,7 @@ import numpy as np
 import requests
 
 from sglang.srt.environ import envs
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.few_shot_gsm8k import run_eval as run_gsm8k_eval
 from sglang.test.kits.abort_timeout_kit import (
     AbortAllMixin,
@@ -24,6 +24,14 @@ from sglang.test.test_utils import DEFAULT_TARGET_MODEL_EAGLE, run_logprob_check
 
 register_cuda_ci(est_time=1100, suite="stage-b-test-1-gpu-large")
 
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+    nightly=False,
+    disabled="DCU CSV CI placeholder: EAGLE speculative decoding path needs BW1000 draft/target model mapping before enabling.",
+)
 
 class TestEAGLEServerBasic(EagleServerBase):
     extra_args = ["--chunked-prefill-size", 128, "--max-running-requests", 8]

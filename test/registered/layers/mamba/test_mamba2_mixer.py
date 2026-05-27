@@ -13,9 +13,17 @@ from sglang.srt.distributed.parallel_state import (
     init_distributed_environment,
     initialize_model_parallel,
 )
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 
 register_cuda_ci(est_time=50, suite="stage-b-test-2-gpu-large")
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
+    disabled="DCU CSV CI placeholder: Mamba2 mixer path needs BW1000 backend validation before enabling.",
+)
 
 NUM_GPUS = 2
 

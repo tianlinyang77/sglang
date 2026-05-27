@@ -7,13 +7,19 @@ import torch
 import torch.multiprocessing as mp
 
 from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 
 register_amd_ci(
     est_time=19, suite="stage-b-test-2-gpu-large-amd", disabled="see #11127"
 )
 register_cuda_ci(est_time=19, suite="stage-b-test-2-gpu-large")
 
+
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+    disabled="DCU Stage-B deferred: multiprocessing CUDA tensor transfer failed on BW1000 with HIP_VISIBLE_DEVICES=2,3; 1 subtest passed and 3 subtests failed, then wrapper timed out during cleanup.",
+)
 
 class TestReleaseMemoryOccupation(unittest.TestCase):
     def test_monkey_patch_torch_reductions(self):

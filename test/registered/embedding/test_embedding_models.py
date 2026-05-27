@@ -13,6 +13,7 @@
 # ==============================================================================
 
 import multiprocessing as mp
+import os
 import random
 import unittest
 from typing import Optional
@@ -20,7 +21,7 @@ from typing import Optional
 import torch
 from transformers import AutoConfig, AutoTokenizer
 
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.runners import DEFAULT_PROMPTS, HFRunner, SRTRunner
 from sglang.test.test_utils import (
     CustomTestCase,
@@ -37,14 +38,28 @@ register_amd_ci(
 )
 register_cuda_ci(est_time=73, suite="stage-b-test-1-gpu-small")
 
-MODEL_TO_CONFIG = {
-    "Alibaba-NLP/gte-Qwen2-1.5B-instruct": (1, 1e-5),
-    "intfloat/e5-mistral-7b-instruct": (1, 1e-5),
-    "marco/mcdse-2b-v1": (1, 1e-5),
-    "Qwen/Qwen3-Embedding-8B": (1, 1e-5),
-    # Temporarily disable before this model is fixed
-    # "jason9693/Qwen2.5-1.5B-apeach": (1, 1e-5),
-}
+# DCU_CSV_COVERED_UNVERIFIED: Enabled from sglang.csv historical DCU coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+    disabled="DCU Stage-B deferred: local gte-Qwen2 mapping added, but HFRunner/SRTRunner logits comparison hung before DCU allocation on BW1000; OpenAI embedding API smoke is enabled separately.",
+)
+
+if os.environ.get("SGLANG_IS_IN_CI_DCU"):
+    _dcu_embedding_model = os.environ.get(
+        "SGLANG_TEST_DEFAULT_SMALL_EMBEDDING_MODEL_NAME",
+        "/public/opendas/DL_DATA/llm-models/vllm-optest-models/Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+    )
+    MODEL_TO_CONFIG = {_dcu_embedding_model: (1, 1e-5)}
+else:
+    MODEL_TO_CONFIG = {
+        "Alibaba-NLP/gte-Qwen2-1.5B-instruct": (1, 1e-5),
+        "intfloat/e5-mistral-7b-instruct": (1, 1e-5),
+        "marco/mcdse-2b-v1": (1, 1e-5),
+        "Qwen/Qwen3-Embedding-8B": (1, 1e-5),
+        # Temporarily disable before this model is fixed
+        # "jason9693/Qwen2.5-1.5B-apeach": (1, 1e-5),
+    }
 MODELS = [(key, *MODEL_TO_CONFIG[key]) for key in MODEL_TO_CONFIG]
 
 TORCH_DTYPES = [torch.float16]
@@ -133,12 +148,12 @@ class TestEmbeddingModels(CustomTestCase):
                 )
 
     def test_matryoshka_embedding(self):
-        models_to_test = [
-            (
-                "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
-                *MODEL_TO_CONFIG["Alibaba-NLP/gte-Qwen2-1.5B-instruct"],
-            )
-        ]
+        matryoshka_model = (
+            _dcu_embedding_model
+            if os.environ.get("SGLANG_IS_IN_CI_DCU")
+            else "Alibaba-NLP/gte-Qwen2-1.5B-instruct"
+        )
+        models_to_test = [(matryoshka_model, *MODEL_TO_CONFIG[matryoshka_model])]
 
         for model, tp_size, prefill_tolerance in models_to_test:
             for torch_dtype in TORCH_DTYPES:

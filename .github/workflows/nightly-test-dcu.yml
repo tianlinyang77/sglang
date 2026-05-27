@@ -1,0 +1,208 @@
+name: Nightly Test (DCU)
+
+# Nightly DCU suites:
+#   - nightly-dcu-accuracy : GSM8K / MMLU style accuracy
+#   - nightly-dcu-vlm      : VLM / MMMU style accuracy
+#   - nightly-dcu-perf     : throughput / TTFT / TPOT benchmarks
+# Heavier model / multi-card suites can be added later.
+
+on:
+  schedule:
+    - cron: "0 18 * * *"   # 02:00 Asia/Shanghai
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Single nightly suite to run (default runs all)"
+        required: false
+        type: choice
+        default: ""
+        options:
+          - ""
+          - nightly-dcu-accuracy
+          - nightly-dcu-vlm
+          - nightly-dcu-perf
+      runner_label:
+        description: "DCU runner label override"
+        required: false
+        type: string
+        default: ""
+      image:
+        description: "DCU CI container image override"
+        required: false
+        type: string
+        default: ""
+      dcu_ci_image:
+        description: "Backward-compatible DCU CI docker image override"
+        required: false
+        type: string
+        default: ""
+      continue_on_error:
+        description: "Continue running remaining files after a test failure"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: nightly-test-dcu-${{ github.ref }}-${{ inputs.suite || 'all' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
+
+env:
+  DCU_RUNNER_LABEL: ${{ inputs.runner_label || vars.DCU_CI_RUNNER_LABEL || 'linux-dcu-k100-1' }}
+  DCU_IMAGE: ${{ inputs.image || inputs.dcu_ci_image || vars.DCU_CI_IMAGE }}
+  DCU_CONTINUE_ON_ERROR_FLAG: ${{ (github.event_name == 'schedule' || inputs.continue_on_error) && '--continue-on-error' || '' }}
+
+jobs:
+  nightly-dcu-accuracy:
+    if: ${{ github.repository == 'sgl-project/sglang' && (github.event_name == 'schedule' || inputs.suite == '' || inputs.suite == 'nightly-dcu-accuracy') }}
+    runs-on: ${{ inputs.runner_label || vars.DCU_CI_RUNNER_LABEL || 'linux-dcu-k100-1' }}
+    timeout-minutes: 240
+    env:
+      DCU_CI_IMAGE: ${{ inputs.image || inputs.dcu_ci_image || vars.DCU_CI_IMAGE }}
+      DCU_CI_CONTAINER_NAME: ci_sglang_dcu_${{ github.run_id }}_accuracy
+      SGLANG_DCU_GSM8K_MODEL: ${{ vars.SGLANG_DCU_GSM8K_MODEL || '/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-7B-Instruct' }}
+      SGLANG_DCU_MMLU_MODEL: ${{ vars.SGLANG_DCU_MMLU_MODEL || '/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-7B-Instruct' }}
+      SGLANG_DCU_GSM8K_DATA_PATH: ${{ vars.SGLANG_DCU_GSM8K_DATA_PATH || '' }}
+      SGLANG_DCU_MMLU_DATASET_PATH: ${{ vars.SGLANG_DCU_MMLU_DATASET_PATH || '/public/opendas/DL_DATA/llm-models/datasets/mmlu' }}
+      SGLANG_DCU_GSM8K_NUM_EXAMPLES: ${{ vars.SGLANG_DCU_GSM8K_NUM_EXAMPLES || '1319' }}
+      SGLANG_DCU_MMLU_NUM_EXAMPLES: ${{ vars.SGLANG_DCU_MMLU_NUM_EXAMPLES || '5000' }}
+      SGLANG_DCU_GSM8K_THRESHOLD: ${{ vars.SGLANG_DCU_GSM8K_THRESHOLD || '0.65' }}
+      SGLANG_DCU_MMLU_THRESHOLD: ${{ vars.SGLANG_DCU_MMLU_THRESHOLD || '0.68' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start CI container
+        run: bash scripts/ci/dcu/dcu_ci_start_container.sh --image "${DCU_CI_IMAGE}" --container-name "${DCU_CI_CONTAINER_NAME}"
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+
+      - name: Install dependencies
+        run: bash scripts/ci/dcu/dcu_ci_install_dependency.sh
+
+      - name: Run accuracy nightly
+        timeout-minutes: 220
+        run: |
+          bash scripts/ci/dcu/dcu_ci_exec.sh \
+            --container-name "${DCU_CI_CONTAINER_NAME}" \
+            -w /sglang-checkout/test \
+            -e SGLANG_DCU_GSM8K_MODEL="${SGLANG_DCU_GSM8K_MODEL}" \
+            -e SGLANG_DCU_MMLU_MODEL="${SGLANG_DCU_MMLU_MODEL}" \
+            -e SGLANG_DCU_GSM8K_DATA_PATH="${SGLANG_DCU_GSM8K_DATA_PATH}" \
+            -e SGLANG_DCU_MMLU_DATASET_PATH="${SGLANG_DCU_MMLU_DATASET_PATH}" \
+            -e SGLANG_DCU_GSM8K_NUM_EXAMPLES="${SGLANG_DCU_GSM8K_NUM_EXAMPLES}" \
+            -e SGLANG_DCU_MMLU_NUM_EXAMPLES="${SGLANG_DCU_MMLU_NUM_EXAMPLES}" \
+            -e SGLANG_DCU_GSM8K_THRESHOLD="${SGLANG_DCU_GSM8K_THRESHOLD}" \
+            -e SGLANG_DCU_MMLU_THRESHOLD="${SGLANG_DCU_MMLU_THRESHOLD}" \
+            python3 run_suite.py \
+              --hw dcu \
+              --suite nightly-dcu-accuracy \
+              --nightly \
+              ${DCU_CONTINUE_ON_ERROR_FLAG} \
+              --timeout-per-file 3600
+
+      - name: Stop CI container
+        if: always()
+        run: docker rm -f "${DCU_CI_CONTAINER_NAME}" || true
+
+  nightly-dcu-vlm:
+    if: ${{ github.repository == 'sgl-project/sglang' && (github.event_name == 'schedule' || inputs.suite == '' || inputs.suite == 'nightly-dcu-vlm') }}
+    runs-on: ${{ inputs.runner_label || vars.DCU_CI_RUNNER_LABEL || 'linux-dcu-k100-1' }}
+    timeout-minutes: 240
+    env:
+      DCU_CI_IMAGE: ${{ inputs.image || inputs.dcu_ci_image || vars.DCU_CI_IMAGE }}
+      DCU_CI_CONTAINER_NAME: ci_sglang_dcu_${{ github.run_id }}_vlm
+      SGLANG_DCU_MMMU_MODEL: ${{ vars.SGLANG_DCU_MMMU_MODEL || '/public/opendas/DL_DATA/llm-models/qwen2.5/Qwen2.5-VL-3B-Instruct' }}
+      SGLANG_DCU_MMMU_DATASET_PATH: ${{ vars.SGLANG_DCU_MMMU_DATASET_PATH || '/public/opendas/DL_DATA/llm-models/multimodal-datasets/MMMU' }}
+      SGLANG_DCU_MMMU_NUM_EXAMPLES: ${{ vars.SGLANG_DCU_MMMU_NUM_EXAMPLES || '100' }}
+      SGLANG_DCU_MMMU_NUM_THREADS: ${{ vars.SGLANG_DCU_MMMU_NUM_THREADS || '64' }}
+      SGLANG_DCU_MMMU_THRESHOLD: ${{ vars.SGLANG_DCU_MMMU_THRESHOLD || '0.35' }}
+      SGLANG_DCU_MMMU_LATENCY_THRESHOLD: ${{ vars.SGLANG_DCU_MMMU_LATENCY_THRESHOLD || '1000000000' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start CI container
+        run: bash scripts/ci/dcu/dcu_ci_start_container.sh --image "${DCU_CI_IMAGE}" --container-name "${DCU_CI_CONTAINER_NAME}"
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+
+      - name: Install dependencies
+        run: bash scripts/ci/dcu/dcu_ci_install_dependency.sh
+
+      - name: Run VLM nightly
+        timeout-minutes: 220
+        run: |
+          bash scripts/ci/dcu/dcu_ci_exec.sh \
+            --container-name "${DCU_CI_CONTAINER_NAME}" \
+            -w /sglang-checkout/test \
+            -e SGLANG_DCU_MMMU_MODEL="${SGLANG_DCU_MMMU_MODEL}" \
+            -e SGLANG_DCU_MMMU_DATASET_PATH="${SGLANG_DCU_MMMU_DATASET_PATH}" \
+            -e SGLANG_DCU_MMMU_NUM_EXAMPLES="${SGLANG_DCU_MMMU_NUM_EXAMPLES}" \
+            -e SGLANG_DCU_MMMU_NUM_THREADS="${SGLANG_DCU_MMMU_NUM_THREADS}" \
+            -e SGLANG_DCU_MMMU_THRESHOLD="${SGLANG_DCU_MMMU_THRESHOLD}" \
+            -e SGLANG_DCU_MMMU_LATENCY_THRESHOLD="${SGLANG_DCU_MMMU_LATENCY_THRESHOLD}" \
+            python3 run_suite.py \
+              --hw dcu \
+              --suite nightly-dcu-vlm \
+              --nightly \
+              ${DCU_CONTINUE_ON_ERROR_FLAG} \
+              --timeout-per-file 7200
+
+      - name: Stop CI container
+        if: always()
+        run: docker rm -f "${DCU_CI_CONTAINER_NAME}" || true
+
+  nightly-dcu-perf:
+    if: ${{ github.repository == 'sgl-project/sglang' && (github.event_name == 'schedule' || inputs.suite == '' || inputs.suite == 'nightly-dcu-perf') }}
+    runs-on: ${{ inputs.runner_label || vars.DCU_CI_RUNNER_LABEL || 'linux-dcu-k100-1' }}
+    timeout-minutes: 240
+    env:
+      DCU_CI_IMAGE: ${{ inputs.image || inputs.dcu_ci_image || vars.DCU_CI_IMAGE }}
+      DCU_CI_CONTAINER_NAME: ci_sglang_dcu_${{ github.run_id }}_perf
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start CI container
+        run: bash scripts/ci/dcu/dcu_ci_start_container.sh --image "${DCU_CI_IMAGE}" --container-name "${DCU_CI_CONTAINER_NAME}"
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+
+      - name: Install dependencies
+        run: bash scripts/ci/dcu/dcu_ci_install_dependency.sh
+
+      - name: Run perf nightly
+        timeout-minutes: 220
+        run: |
+          bash scripts/ci/dcu/dcu_ci_exec.sh \
+            --container-name "${DCU_CI_CONTAINER_NAME}" \
+            -w /sglang-checkout/test \
+            python3 run_suite.py \
+              --hw dcu \
+              --suite nightly-dcu-perf \
+              --nightly \
+              ${DCU_CONTINUE_ON_ERROR_FLAG} \
+              --timeout-per-file 3600
+
+      - name: Stop CI container
+        if: always()
+        run: docker rm -f "${DCU_CI_CONTAINER_NAME}" || true
+
+  check-all-jobs:
+    if: ${{ github.repository == 'sgl-project/sglang' && always() }}
+    needs:
+      - nightly-dcu-accuracy
+      - nightly-dcu-vlm
+      - nightly-dcu-perf
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate nightly DCU status
+        run: |
+          echo "nightly-dcu-accuracy: ${{ needs.nightly-dcu-accuracy.result }}"
+          echo "nightly-dcu-vlm:      ${{ needs.nightly-dcu-vlm.result }}"
+          echo "nightly-dcu-perf:     ${{ needs.nightly-dcu-perf.result }}"
+          if [[ "${{ needs.nightly-dcu-accuracy.result }}" == "failure" \
+             || "${{ needs.nightly-dcu-vlm.result }}"      == "failure" \
+             || "${{ needs.nightly-dcu-perf.result }}"     == "failure" ]]; then
+            exit 1
+          fi

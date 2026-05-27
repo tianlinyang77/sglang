@@ -19,6 +19,7 @@ HW_MAPPING = {
     "cuda": HWBackend.CUDA,
     "amd": HWBackend.AMD,
     "npu": HWBackend.NPU,
+    "dcu": HWBackend.DCU,
 }
 
 # Per-commit test suites (run on every PR)
@@ -60,6 +61,13 @@ PER_COMMIT_SUITES = {
         "stage-b-test-2-npu-a2",
         "stage-b-test-4-npu-a3",
         "stage-b-test-16-npu-a3",
+    ],
+    HWBackend.DCU: [
+        "stage-a-test-1-gpu-small-dcu",
+        "stage-b-test-1-gpu-small-dcu",
+        "stage-b-test-1-gpu-large-dcu",
+        "stage-b-test-2-gpu-large-dcu",
+        "stage-c-test-large-8-gpu-dcu",
     ],
 }
 
@@ -103,6 +111,15 @@ NIGHTLY_SUITES = {
         "nightly-4-npu-a3",
         "nightly-8-npu-a3",
         "nightly-16-npu-a3",
+    ],
+    HWBackend.DCU: [
+        "nightly-dcu",
+        "nightly-dcu-1-gpu",
+        "nightly-dcu-4-gpu",
+        "nightly-dcu-8-gpu",
+        "nightly-dcu-accuracy",
+        "nightly-dcu-perf",
+        "nightly-dcu-vlm",
     ],
 }
 
@@ -210,6 +227,9 @@ def run_a_suite(args):
 
     pretty_print_tests(args, ci_tests, skipped_tests)
 
+    if args.list:
+        return 0
+
     # Add extra timeout when retry is enabled
     timeout = args.timeout_per_file
     if args.enable_retry:
@@ -287,6 +307,11 @@ def main():
         type=int,
         default=600,
         help="Additional timeout in seconds when retry is enabled (default: 600)",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List selected test files without running them.",
     )
     args = parser.parse_args()
 

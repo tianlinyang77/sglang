@@ -13,11 +13,17 @@ from sglang.srt.server_args import (
     set_global_server_args_for_scheduler,
 )
 from sglang.srt.utils import get_device
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 
 register_cuda_ci(est_time=9, suite="stage-b-test-1-gpu-small")
 register_amd_ci(est_time=15, suite="stage-b-test-1-gpu-small-amd")
 
+
+# DCU BW1000 validated on 10.16.1.66/dxl-sglang: logits fp32 path passed three runs.
+register_dcu_ci(
+    est_time=120,
+    suite="stage-b-test-1-gpu-small-dcu",
+)
 
 class LMHeadStub(nn.Module):
     def __init__(self, vocab, hidden, dtype, device=get_device()):

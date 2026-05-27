@@ -1,11 +1,19 @@
 import unittest
 
-from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci, register_dcu_ci
 from sglang.test.gpt_oss_common import BaseTestGptOss
 
 register_cuda_ci(est_time=300, suite="stage-c-test-4-gpu-h100")
 register_cuda_ci(est_time=300, suite="stage-c-test-4-gpu-b200")
 
+
+# DCU_CSV_CI_UNVERIFIED: Registered from sglang.csv CI coverage; not re-tested in this framework pass.
+register_dcu_ci(
+    est_time=300,
+    suite="nightly-dcu-4-gpu",
+    nightly=True,
+    disabled="DCU CSV CI placeholder: 4-GPU GPT-OSS path needs BW1000 large-model validation before enabling.",
+)
 
 class TestGptOss4Gpu(BaseTestGptOss):
     def test_bf16_120b(self):

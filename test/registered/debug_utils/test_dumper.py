@@ -34,7 +34,7 @@ from sglang.srt.debug_utils.dumper import (
 )
 from sglang.srt.environ import temp_set_env
 from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci, register_dcu_ci
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
@@ -46,6 +46,12 @@ from sglang.test.test_utils import (
 register_cuda_ci(est_time=30, suite="nightly-2-gpu", nightly=True)
 register_amd_ci(est_time=60, suite="nightly-amd", nightly=True)
 
+
+register_dcu_ci(
+    est_time=120,
+    suite="nightly-dcu",
+    nightly=True,
+)
 
 @contextmanager
 def _capture_stdout():
