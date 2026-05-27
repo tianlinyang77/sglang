@@ -13,11 +13,14 @@ __all__ = [
     "register_cuda_ci",
     "register_amd_ci",
     "register_npu_ci",
+    "register_xpu_ci",
     "register_dcu_ci",
     "ut_parse_one_file",
 ]
 
 _PARAM_ORDER = ("est_time", "suite", "nightly", "disabled")
+_KWARG_ONLY = ("stage", "runner_config")
+_ALL_PARAMS = _PARAM_ORDER + _KWARG_ONLY
 _UNSET = object()
 
 
@@ -26,6 +29,7 @@ class HWBackend(Enum):
     CUDA = auto()
     AMD = auto()
     NPU = auto()
+    XPU = auto()
     DCU = auto()
 
 
@@ -44,14 +48,26 @@ class CIRegistry:
 
 
 def register_cpu_ci(
-    est_time: float, suite: str, nightly: bool = False, disabled: Optional[str] = None
+    est_time: float,
+    suite: Optional[str] = None,
+    nightly: bool = False,
+    disabled: Optional[str] = None,
+    *,
+    stage: Optional[str] = None,
+    runner_config: Optional[str] = None,
 ):
     """Marker for CPU CI registration (parsed via AST; runtime no-op)."""
     return None
 
 
 def register_cuda_ci(
-    est_time: float, suite: str, nightly: bool = False, disabled: Optional[str] = None
+    est_time: float,
+    suite: Optional[str] = None,
+    nightly: bool = False,
+    disabled: Optional[str] = None,
+    *,
+    stage: Optional[str] = None,
+    runner_config: Optional[str] = None,
 ):
     """Marker for CUDA CI registration (parsed via AST; runtime no-op)."""
     return None
@@ -59,9 +75,12 @@ def register_cuda_ci(
 
 def register_amd_ci(
     est_time: float,
-    suite: str,
+    suite: Optional[str] = None,
     nightly: bool = False,
     disabled: Optional[str] = None,
+    *,
+    stage: Optional[str] = None,
+    runner_config: Optional[str] = None,
 ):
     """Marker for AMD CI registration (parsed via AST; runtime no-op)."""
     return None
@@ -69,19 +88,38 @@ def register_amd_ci(
 
 def register_npu_ci(
     est_time: float,
-    suite: str,
+    suite: Optional[str] = None,
     nightly: bool = False,
     disabled: Optional[str] = None,
+    *,
+    stage: Optional[str] = None,
+    runner_config: Optional[str] = None,
 ):
     """Marker for NPU CI registration (parsed via AST; runtime no-op)."""
     return None
 
 
-def register_dcu_ci(
+def register_xpu_ci(
     est_time: float,
-    suite: str,
+    suite: Optional[str] = None,
     nightly: bool = False,
     disabled: Optional[str] = None,
+    *,
+    stage: Optional[str] = None,
+    runner_config: Optional[str] = None,
+):
+    """Marker for XPU CI registration (parsed via AST; runtime no-op)."""
+    return None
+
+
+def register_dcu_ci(
+    est_time: float,
+    suite: Optional[str] = None,
+    nightly: bool = False,
+    disabled: Optional[str] = None,
+    *,
+    stage: Optional[str] = None,
+    runner_config: Optional[str] = None,
 ):
     """Marker for DCU CI registration (parsed via AST; runtime no-op)."""
     return None
@@ -92,6 +130,7 @@ REGISTER_MAPPING = {
     "register_cuda_ci": HWBackend.CUDA,
     "register_amd_ci": HWBackend.AMD,
     "register_npu_ci": HWBackend.NPU,
+    "register_xpu_ci": HWBackend.XPU,
     "register_dcu_ci": HWBackend.DCU,
 }
 
@@ -109,7 +148,7 @@ class RegistryVisitor(ast.NodeVisitor):
     def _parse_call_args(
         self, func_call: ast.Call
     ) -> tuple[float, str, bool, Optional[str]]:
-        args = {name: _UNSET for name in _PARAM_ORDER}
+        args = {name: _UNSET for name in _ALL_PARAMS}
         seen = set()
 
         if any(isinstance(arg, ast.Starred) for arg in func_call.args):
@@ -141,22 +180,46 @@ class RegistryVisitor(ast.NodeVisitor):
             seen.add(kw.arg)
             args[kw.arg] = self._constant_value(kw.value)
 
-        if args["est_time"] is _UNSET or args["suite"] is _UNSET:
+        if args["est_time"] is _UNSET:
             raise ValueError(
-                f"{self.filename}: est_time and suite are required constants in {func_call.func.id}()"
+                f"{self.filename}: est_time is a required constant in {func_call.func.id}()"
             )
 
         est_time, suite = args["est_time"], args["suite"]
+        stage = args["stage"]
+        runner_config = args["runner_config"]
         nightly_value = args["nightly"]
 
         if not isinstance(est_time, (int, float)):
             raise ValueError(
                 f"{self.filename}: est_time must be a number in {func_call.func.id}()"
             )
-        if not isinstance(suite, str):
+
+        suite_set = suite is not _UNSET
+        stage_set = stage is not _UNSET
+        runner_config_set = runner_config is not _UNSET
+        if suite_set and (stage_set or runner_config_set):
+            raise ValueError(
+                f"{self.filename}: {func_call.func.id}() must specify suite or "
+                "(stage, runner_config), not both"
+            )
+        if not suite_set and not (stage_set and runner_config_set):
+            raise ValueError(
+                f"{self.filename}: {func_call.func.id}() must specify suite or "
+                "both stage and runner_config"
+            )
+
+        if suite_set and not isinstance(suite, str):
             raise ValueError(
                 f"{self.filename}: suite must be a string in {func_call.func.id}()"
             )
+        if not suite_set:
+            for name, value in (("stage", stage), ("runner_config", runner_config)):
+                if not isinstance(value, str):
+                    raise ValueError(
+                        f"{self.filename}: {name} must be a string in {func_call.func.id}()"
+                    )
+            suite = f"{stage}-test-{runner_config}"
 
         if nightly_value is _UNSET:
             nightly = False

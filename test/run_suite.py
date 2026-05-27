@@ -317,7 +317,9 @@ def run_a_suite(args):
         for f in glob.glob(
             os.path.join(SCRIPT_DIR, "registered", "**", "*.py"), recursive=True
         )
-        if not f.endswith("/conftest.py") and not f.endswith("/__init__.py")
+        if not f.endswith("/conftest.py")
+        and not f.endswith("/__init__.py")
+        and not f.endswith("/cpu/utils.py")
     ]
 
     # JIT kernel tests and benchmarks (live alongside kernel source)
