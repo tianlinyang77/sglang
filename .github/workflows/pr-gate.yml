@@ -5,14 +5,18 @@ on:
         description: "Whether the PR must have the run-ci label"
         type: boolean
         default: true
-      require-run-ci-extra:
-        description: "Whether the PR must also have the run-ci-extra label (in addition to run-ci)"
-        type: boolean
-        default: false
       cool-down-minutes:
         description: "Cooldown period in minutes for low-permission users; 0 disables rate limiting"
         type: number
         default: 120
+      workflow-id:
+        description: "Workflow file name used for cooldown lookup"
+        type: string
+        default: pr-test.yml
+      resource-gate-jobs:
+        description: "Comma-separated job names that do not count as resource-consuming CI"
+        type: string
+        default: check-changes,pr-gate,call-gate,pr-test-finish
 
 jobs:
   pr-gate:
@@ -45,8 +49,9 @@ jobs:
           echo "PR Draft: ${{ steps.pr.outputs.draft }}"
           echo "PR User: ${{ steps.pr.outputs.user }}"
           echo "Require run-ci: ${{ inputs.require-run-ci }}"
-          echo "Require run-ci-extra: ${{ inputs.require-run-ci-extra }}"
           echo "Cool down minutes: ${{ inputs.cool-down-minutes }}"
+          echo "Workflow ID: ${{ inputs.workflow-id }}"
+          echo "Resource gate jobs: ${{ inputs.resource-gate-jobs }}"
           echo "==================="
 
       - name: Block draft PR
@@ -61,19 +66,6 @@ jobs:
           labels='${{ steps.pr.outputs.labels }}'
           if [[ "${{ contains(fromJson(steps.pr.outputs.labels), 'run-ci') }}" == "false" ]]; then
             echo "Missing required label 'run-ci'. See https://docs.sglang.io/developer_guide/contribution_guide.html#how-to-trigger-ci-tests for more details."
-            exit 1
-          fi
-
-      # Live-fetch label gate for pr-test-extra.yml. Workflow-level `if`
-      # checks would read the frozen event payload, which doesn't update on
-      # rerun — so /tag-and-rerun-ci extra (slash handler adds the label
-      # then reruns) could never un-skip. A runtime step using gh-api-fetched
-      # labels lets reruns pick up the new label set.
-      - name: Require run-ci-extra label (optional)
-        if: github.event_name == 'pull_request' && inputs.require-run-ci-extra == true
-        run: |
-          if [[ "${{ contains(fromJson(steps.pr.outputs.labels), 'run-ci-extra') }}" == "false" ]]; then
-            echo "Missing required label 'run-ci-extra'. Add the label (e.g. via /tag-and-rerun-ci extra) to opt this PR into the extra test workflow."
             exit 1
           fi
 
@@ -167,7 +159,7 @@ jobs:
             const { data } = await github.rest.actions.listWorkflowRuns({
               owner,
               repo,
-              workflow_id: 'pr-test.yml',
+              workflow_id: '${{ inputs.workflow-id }}',
               event: eventName,
               per_page: 100,
             });
@@ -199,7 +191,10 @@ jobs:
                 }
 
                 // Gate jobs that don't consume significant CI resources
-                const gateJobs = ['check-changes', 'pr-gate', 'call-gate', 'pr-test-finish'];
+                const gateJobs = '${{ inputs.resource-gate-jobs }}'
+                  .split(',')
+                  .map(name => name.trim())
+                  .filter(Boolean);
                 const jobsBeyondGate = jobs.filter(j => !gateJobs.some(g => j.name === g || j.name.startsWith(g + ' ')));
 
                 // A job "ran" if it reached a terminal conclusion state that indicates actual execution
