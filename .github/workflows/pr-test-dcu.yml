@@ -257,6 +257,7 @@ jobs:
     env:
       DCU_CI_IMAGE: ${{ needs.validate-config.outputs.image }}
       DCU_CI_CONTAINER_NAME: ci_sglang_dcu_${{ github.run_id }}_stage_a
+      DCU_CI_SKIP_SGLANG_BUILD: ${{ vars.DCU_CI_SKIP_SGLANG_BUILD || '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -308,6 +309,7 @@ jobs:
     env:
       DCU_CI_IMAGE: ${{ needs.validate-config.outputs.image }}
       DCU_CI_CONTAINER_NAME: ci_sglang_dcu_${{ github.run_id }}_stage_b_${{ matrix.part }}
+      DCU_CI_SKIP_SGLANG_BUILD: ${{ vars.DCU_CI_SKIP_SGLANG_BUILD || '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

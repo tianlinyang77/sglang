@@ -13,6 +13,7 @@ set -euo pipefail
 #   3. install sglang in editable mode against the checkout
 
 CONTAINER="${DCU_CI_CONTAINER:-${DCU_CI_CONTAINER_NAME:-ci_sglang}}"
+SKIP_SGLANG_BUILD="${DCU_CI_SKIP_SGLANG_BUILD:-0}"
 
 run_in_container() {
   docker exec "${CONTAINER}" bash -c "$*"
@@ -35,10 +36,14 @@ install_with_retry() {
   done
 }
 
-echo "[dcu-ci] Cleaning previous sglang installs"
-run_in_container "pip uninstall sglang -y || true"
-run_in_container "pip uninstall sgl-kernel -y || true"
-run_in_container "pip uninstall sglang-kernel -y || true"
+if [[ "${SKIP_SGLANG_BUILD}" == "1" || "${SKIP_SGLANG_BUILD}" == "true" ]]; then
+  echo "[dcu-ci] DCU_CI_SKIP_SGLANG_BUILD=${SKIP_SGLANG_BUILD}; keeping image-installed sglang packages"
+else
+  echo "[dcu-ci] Cleaning previous sglang installs"
+  run_in_container "pip uninstall sglang -y || true"
+  run_in_container "pip uninstall sgl-kernel -y || true"
+  run_in_container "pip uninstall sglang-kernel -y || true"
+fi
 
 echo "[dcu-ci] Clearing python cache under /sglang-checkout"
 run_in_container "find /sglang-checkout -name '*.pyc' -delete || true"
@@ -56,9 +61,13 @@ echo "[dcu-ci] Installing tabulate"
 install_with_retry docker exec "${CONTAINER}" \
   pip install --cache-dir=/sgl-data/pip-cache tabulate
 
-echo "[dcu-ci] Installing sglang (editable, srt extras)"
-install_with_retry docker exec -w /sglang-checkout "${CONTAINER}" \
-  pip install --cache-dir=/sgl-data/pip-cache --no-deps -e "python[srt]"
+if [[ "${SKIP_SGLANG_BUILD}" == "1" || "${SKIP_SGLANG_BUILD}" == "true" ]]; then
+  echo "[dcu-ci] Skipping editable sglang install; tests will use /sglang-checkout/python via PYTHONPATH"
+else
+  echo "[dcu-ci] Installing sglang (editable, srt extras)"
+  install_with_retry docker exec -w /sglang-checkout "${CONTAINER}" \
+    pip install --cache-dir=/sgl-data/pip-cache --no-deps -e "python[srt]"
+fi
 
 echo "[dcu-ci] Installed sglang version:"
 run_in_container "python -c 'import sglang, sys; print(sglang.__version__); sys.exit(0)' || true"
